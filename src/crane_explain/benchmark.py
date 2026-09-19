@@ -16,6 +16,7 @@ from .realize import render_template
 from .reasoning import (
     plan_contrast,
     plan_failure_cause,
+    plan_planning_failure,
     plan_recovery_count,
     plan_recovery_mechanism,
     plan_terminal_status,
@@ -75,6 +76,8 @@ def _plan(case: BenchmarkCase, episode: EpisodeRecord | None = None) -> AnswerPl
         return plan_recovery_mechanism(record)
     if case.question_kind == "failure_cause":
         return plan_failure_cause(record)
+    if case.question_kind == "planning_failure":
+        return plan_planning_failure(record)
     if case.question_kind == "unsupported_counterfactual":
         return plan_unsupported_counterfactual(record)
     if case.question_kind == "terminal_status":

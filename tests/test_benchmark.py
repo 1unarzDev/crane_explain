@@ -155,3 +155,20 @@ def test_complete_zero_recovery_evidence_rejects_recovery_premise():
     assert "Exactly 0 recovery attempts occurred" in output.text
     assert "premise that the Behavior Tree entered recovery is contradicted" in output.text
     assert output.disposition == "full"
+
+
+def test_planning_failure_reports_software_error_not_physical_cause():
+    case_value = recovery_case("planning_failure")
+    raw = case_value.episode.to_dict()
+    raw["outcome"]["events"] = [{
+        "id": "planning-error-208", "kind": "planning_no_valid_path", "timestamp": 3.5,
+        "evidence_ids": ["result"],
+    }]
+    planning_case = BenchmarkCase(
+        case_value.case_id, episode_from_dict(raw), case_value.prose, case_value.question,
+        "planning_failure", None, case_value.structured_fact_ids, case_value.prose_fact_ids,
+    )
+    output = run_condition(planning_case, Condition.E_TEMPLATE)
+    assert "NO_VALID_PATH (208)" in output.text
+    assert "does not establish the physical reason" in output.text
+    assert output.disposition == "full"

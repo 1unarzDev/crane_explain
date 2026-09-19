@@ -288,6 +288,43 @@ def plan_failure_cause(episode: EpisodeRecord) -> AnswerPlan:
     )
 
 
+def plan_planning_failure(episode: EpisodeRecord) -> AnswerPlan:
+    """Explain a recorded planner error without inventing its physical cause."""
+    outcome = episode.outcome
+    if not outcome:
+        return AnswerPlan("planning-failure", "abstain", (),
+                          ("No terminal outcome is available.",))
+    events = tuple(event for event in outcome.events if event.kind == "planning_no_valid_path")
+    if events:
+        return AnswerPlan(
+            "planning-failure", "full",
+            (Claim(
+                "planning-no-valid-path",
+                "The NavigateToPose result recorded planner error NO_VALID_PATH (208) while "
+                "ComputePathToPose was active.",
+                SupportStatus.SUPPORTED,
+                tuple(event.id for event in events),
+                "recorded action error code mapped through installed nav2_msgs plus active BT node",
+                "execution", EvidenceLevel.SOFTWARE_MECHANISM,
+            ),),
+            ("The robot-visible evidence does not establish the physical reason that the planner "
+             "found no valid path.",),
+        )
+    if outcome.terminal_status.lower() in {"success", "succeeded"}:
+        return AnswerPlan(
+            "planning-failure", "full",
+            (Claim(
+                "terminal-status", f"The recorded task outcome was {outcome.terminal_status}.",
+                SupportStatus.SUPPORTED, outcome.evidence_ids, "recorded terminal_status",
+                "execution", EvidenceLevel.RECORDED_SEQUENCE,
+            ),),
+            ("The question's premise of a planning failure is contradicted by the recorded "
+             "successful outcome.",),
+        )
+    return AnswerPlan(
+        "planning-failure", "abstain", (),
+        ("The available evidence does not establish that planning failed with NO_VALID_PATH.",),
+    )
 def plan_unsupported_counterfactual(episode: EpisodeRecord) -> AnswerPlan:
     """Reject a hypothetical outcome when no intervention or causal model is recorded."""
     return AnswerPlan(
