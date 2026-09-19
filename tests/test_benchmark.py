@@ -139,3 +139,19 @@ def test_successful_outcome_rejects_failure_cause_premise():
     )
     output = run_condition(successful, Condition.E_TEMPLATE)
     assert "premise of a navigation failure is contradicted" in output.text
+
+
+def test_complete_zero_recovery_evidence_rejects_recovery_premise():
+    case_value = recovery_case("recovery_mechanism")
+    raw = case_value.episode.to_dict()
+    raw["outcome"]["events"] = []
+    raw["outcome"]["history_complete"] = False
+    raw["outcome"]["recovery_history_complete"] = True
+    exact_zero = BenchmarkCase(
+        case_value.case_id, episode_from_dict(raw), case_value.prose, case_value.question,
+        case_value.question_kind, None, case_value.structured_fact_ids, case_value.prose_fact_ids,
+    )
+    output = run_condition(exact_zero, Condition.E_TEMPLATE)
+    assert "Exactly 0 recovery attempts occurred" in output.text
+    assert "premise that the Behavior Tree entered recovery is contradicted" in output.text
+    assert output.disposition == "full"

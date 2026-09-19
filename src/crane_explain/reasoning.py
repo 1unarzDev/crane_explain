@@ -210,6 +210,23 @@ def plan_recovery_mechanism(episode: EpisodeRecord) -> AnswerPlan:
         (event for event in outcome.events if event.kind == "recovery_attempt"),
         key=lambda event: event.timestamp,
     )
+    recovery_complete = (
+        outcome.recovery_history_complete
+        if outcome.recovery_history_complete is not None
+        else outcome.history_complete
+    )
+    if not recoveries and recovery_complete:
+        return AnswerPlan(
+            "recovery-mechanism", "full",
+            (Claim(
+                "recovery-count", "Exactly 0 recovery attempts occurred.",
+                SupportStatus.SUPPORTED, outcome.evidence_ids,
+                "complete recovery history contains no distinct recovery attempt IDs",
+                "execution", EvidenceLevel.RECORDED_SEQUENCE,
+            ),),
+            ("The question's premise that the Behavior Tree entered recovery is contradicted by "
+             "the complete recovery-count evidence.",),
+        )
     if not failures or not guards or not recoveries:
         return AnswerPlan(
             "recovery-mechanism", "abstain", (),
