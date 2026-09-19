@@ -1,5 +1,5 @@
 from crane_explain.io import episode_from_dict
-from crane_explain.reasoning import plan_contrast, plan_recovery_count
+from crane_explain.reasoning import plan_contrast, plan_recovery_count, plan_terminal_status
 from crane_explain.realize import render_template
 from crane_explain.verification import verify_final_text
 
@@ -121,3 +121,39 @@ def test_unplanned_fluent_clause_is_rejected():
     result = verify_final_text(plan, text)
     assert not result.accepted
     assert result.unsupported_sentences == ("Dock was the objectively best choice.",)
+
+
+def test_terminal_client_deadline_is_not_mislabeled_as_bt_or_physical_failure():
+    outcome = {
+        "terminal_status": "canceled", "timestamp": 9, "history_complete": True,
+        "evidence_ids": ["result"],
+        "events": [
+            {"id": "deadline", "kind": "client_deadline", "timestamp": 8},
+            {"id": "cancel", "kind": "client_cancel", "timestamp": 8.1},
+        ],
+    }
+    plan = plan_terminal_status(decision(outcome=outcome))
+    text = render_template(plan)
+    assert "recorded task outcome was canceled" in text
+    assert "client deadline" in text and "requested cancellation" in text
+    assert "do not establish that a Behavior Tree timeout" in text
+    assert verify_final_text(plan, text).accepted
+
+
+def test_terminal_abort_does_not_invent_physical_cause():
+    outcome = {
+        "terminal_status": "aborted", "timestamp": 9, "history_complete": True,
+        "evidence_ids": ["result"], "events": [],
+    }
+    text = render_template(plan_terminal_status(decision(outcome=outcome)))
+    assert "recorded task outcome was aborted" in text
+    assert "does not establish the physical cause" in text
+
+
+def test_success_does_not_deny_intermediate_branch_failures():
+    outcome = {
+        "terminal_status": "succeeded", "timestamp": 9, "history_complete": True,
+        "evidence_ids": ["result"], "events": [],
+    }
+    text = render_template(plan_terminal_status(decision(outcome=outcome)))
+    assert "successful outcome does not establish that no intermediate branch failed" in text

@@ -5,7 +5,7 @@ import json
 
 from .io import load_episode
 from .realize import render_template
-from .reasoning import plan_contrast, plan_recovery_count
+from .reasoning import plan_contrast, plan_recovery_count, plan_terminal_status
 from .validation import validate_episode
 from .verification import verify_final_text
 
@@ -19,6 +19,7 @@ def main() -> int:
     explain.add_argument("episode")
     explain.add_argument("--alternative")
     explain.add_argument("--recovery-count", action="store_true")
+    explain.add_argument("--terminal-status", action="store_true")
     args = parser.parse_args()
     episode = load_episode(args.episode)
     errors = validate_episode(episode)
@@ -28,8 +29,12 @@ def main() -> int:
     if args.command == "validate":
         print(json.dumps({"valid": True, "episode_id": episode.episode_id}, indent=2))
         return 0
-    plan = plan_recovery_count(episode) if args.recovery_count else plan_contrast(
-        episode, args.alternative)
+    if args.recovery_count:
+        plan = plan_recovery_count(episode)
+    elif args.terminal_status:
+        plan = plan_terminal_status(episode)
+    else:
+        plan = plan_contrast(episode, args.alternative)
     text = render_template(plan)
     result = verify_final_text(plan, text)
     print(json.dumps({"plan": plan.to_dict(), "text": text,
@@ -39,4 +44,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

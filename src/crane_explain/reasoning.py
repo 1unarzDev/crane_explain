@@ -116,3 +116,50 @@ def plan_recovery_count(episode: EpisodeRecord, premise_count: int | None = None
                EvidenceLevel.RECORDED_SEQUENCE),),
         tuple(limitations),
     )
+
+
+def plan_terminal_status(episode: EpisodeRecord) -> AnswerPlan:
+    """Report recorded termination mechanics without inventing a physical cause."""
+    outcome = episode.outcome
+    if not outcome:
+        return AnswerPlan("terminal-status", "abstain", (),
+                          ("No terminal outcome is available.",))
+    status = outcome.terminal_status.lower()
+    claims = [Claim(
+        "terminal-status",
+        f"The recorded task outcome was {outcome.terminal_status}.",
+        SupportStatus.SUPPORTED, outcome.evidence_ids,
+        "recorded terminal_status", "execution",
+        EvidenceLevel.RECORDED_SEQUENCE,
+    )]
+    deadline_events = tuple(event for event in outcome.events if event.kind == "client_deadline")
+    cancel_events = tuple(event for event in outcome.events if event.kind == "client_cancel")
+    limitations: list[str] = []
+    if deadline_events:
+        claims.append(Claim(
+            "client-deadline",
+            "The experiment harness recorded a client deadline.",
+            SupportStatus.SUPPORTED, tuple(event.id for event in deadline_events),
+            "explicit client_deadline event", "execution",
+            EvidenceLevel.RECORDED_SEQUENCE,
+        ))
+    if cancel_events:
+        claims.append(Claim(
+            "client-cancel",
+            "The experiment harness requested cancellation.",
+            SupportStatus.SUPPORTED, tuple(event.id for event in cancel_events),
+            "explicit client_cancel event", "execution",
+            EvidenceLevel.RECORDED_SEQUENCE,
+        ))
+    if deadline_events or cancel_events:
+        limitations.append(
+            "These client events do not establish that a Behavior Tree timeout or a physical "
+            "navigation failure occurred.")
+    elif status in {"failed", "failure", "aborted", "timeout"}:
+        limitations.append(
+            "The terminal status alone does not establish the physical cause of failure.")
+    elif status in {"success", "succeeded"}:
+        limitations.append(
+            "The successful outcome does not establish that no intermediate branch failed.")
+    return AnswerPlan("terminal-status", "full" if outcome.history_complete else "partial",
+                      tuple(claims), tuple(limitations))

@@ -13,7 +13,7 @@ from typing import Callable
 
 from .models import AnswerPlan, EpisodeRecord
 from .realize import render_template
-from .reasoning import plan_contrast, plan_recovery_count
+from .reasoning import plan_contrast, plan_recovery_count, plan_terminal_status
 from .verification import verify_final_text
 
 
@@ -62,6 +62,8 @@ def _plan(case: BenchmarkCase, episode: EpisodeRecord | None = None) -> AnswerPl
         return plan_contrast(record, case.alternative_id)
     if case.question_kind == "recovery_count":
         return plan_recovery_count(record)
+    if case.question_kind == "terminal_status":
+        return plan_terminal_status(record)
     raise ValueError(f"unsupported question kind: {case.question_kind}")
 
 
@@ -98,4 +100,3 @@ def run_condition(
     # candidate; this common harness performs the mandatory checked fallback.
     return BenchmarkOutput(condition, case.case_id, render_template(plan), plan.disposition,
                            False, True)
-
