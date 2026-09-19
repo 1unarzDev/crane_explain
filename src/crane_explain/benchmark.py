@@ -13,7 +13,14 @@ from typing import Callable
 
 from .models import AnswerPlan, EpisodeRecord
 from .realize import render_template
-from .reasoning import plan_contrast, plan_recovery_count, plan_terminal_status
+from .reasoning import (
+    plan_contrast,
+    plan_failure_cause,
+    plan_recovery_count,
+    plan_recovery_mechanism,
+    plan_terminal_status,
+    plan_unsupported_counterfactual,
+)
 from .verification import verify_final_text
 
 
@@ -35,6 +42,8 @@ class BenchmarkCase:
     alternative_id: str | None
     structured_fact_ids: frozenset[str]
     prose_fact_ids: frozenset[str]
+    premise_count: int | None = None
+    structured_presentation: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +70,13 @@ def _plan(case: BenchmarkCase, episode: EpisodeRecord | None = None) -> AnswerPl
             raise ValueError("contrast question requires alternative_id")
         return plan_contrast(record, case.alternative_id)
     if case.question_kind == "recovery_count":
-        return plan_recovery_count(record)
+        return plan_recovery_count(record, case.premise_count)
+    if case.question_kind == "recovery_mechanism":
+        return plan_recovery_mechanism(record)
+    if case.question_kind == "failure_cause":
+        return plan_failure_cause(record)
+    if case.question_kind == "unsupported_counterfactual":
+        return plan_unsupported_counterfactual(record)
     if case.question_kind == "terminal_status":
         return plan_terminal_status(record)
     raise ValueError(f"unsupported question kind: {case.question_kind}")
@@ -79,8 +94,9 @@ def run_condition(
     if condition in {Condition.A_PROSE_DIRECT, Condition.B_STRUCTURED_DIRECT}:
         if direct_generator is None:
             raise ValueError("direct_generator is required for A/B")
+        structured = case.structured_presentation or case.episode.to_dict()
         evidence = case.prose if condition == Condition.A_PROSE_DIRECT else json.dumps(
-            case.episode.to_dict(), sort_keys=True, separators=(",", ":"))
+            structured, sort_keys=True, separators=(",", ":"))
         return BenchmarkOutput(condition, case.case_id, direct_generator(evidence, case.question),
                                "uncontrolled", None, False)
     if condition == Condition.C_PROSE_EXTRACT_CHECKED:

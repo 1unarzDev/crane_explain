@@ -163,3 +163,85 @@ def plan_terminal_status(episode: EpisodeRecord) -> AnswerPlan:
             "The successful outcome does not establish that no intermediate branch failed.")
     return AnswerPlan("terminal-status", "full" if outcome.history_complete else "partial",
                       tuple(claims), tuple(limitations))
+
+
+def plan_recovery_mechanism(episode: EpisodeRecord) -> AnswerPlan:
+    """Explain an ordered software transition without promoting it to physical causation."""
+    outcome = episode.outcome
+    if not outcome:
+        return AnswerPlan("recovery-mechanism", "abstain", (),
+                          ("No execution history is available.",))
+    failures = sorted(
+        (event for event in outcome.events if event.kind == "follow_path_failure"),
+        key=lambda event: event.timestamp,
+    )
+    guards = sorted(
+        (event for event in outcome.events
+         if event.kind == "controller_recovery_guard_success"),
+        key=lambda event: event.timestamp,
+    )
+    recoveries = sorted(
+        (event for event in outcome.events if event.kind == "recovery_attempt"),
+        key=lambda event: event.timestamp,
+    )
+    if not failures or not guards or not recoveries:
+        return AnswerPlan(
+            "recovery-mechanism", "abstain", (),
+            ("The available record does not contain the transitions required to establish why "
+             "the Behavior Tree entered recovery.",),
+        )
+    failure = failures[0]
+    guard = next((event for event in guards if event.timestamp >= failure.timestamp), None)
+    recovery = next(
+        (event for event in recoveries
+         if guard is not None and event.timestamp >= guard.timestamp), None)
+    if guard is None or recovery is None:
+        return AnswerPlan(
+            "recovery-mechanism", "abstain", (),
+            ("The available transitions do not establish an ordered path into recovery.",),
+        )
+    return AnswerPlan(
+        "recovery-mechanism", "partial",
+        (Claim(
+            "recovery-mechanism",
+            "The recorded FollowPath branch returned FAILURE, the controller-recovery "
+            "eligibility guard returned SUCCESS, and the Behavior Tree then entered Wait.",
+            SupportStatus.SUPPORTED,
+            (failure.id, guard.id, recovery.id),
+            "ordered Behavior Tree transitions",
+            "execution",
+            EvidenceLevel.SOFTWARE_MECHANISM,
+        ),),
+        ("This recorded software mechanism does not establish the physical reason that "
+         "FollowPath failed.",),
+    )
+
+
+def plan_failure_cause(episode: EpisodeRecord) -> AnswerPlan:
+    """Answer a physical-cause question only to the level licensed by the trace."""
+    outcome = episode.outcome
+    if not outcome:
+        return AnswerPlan("failure-cause", "abstain", (),
+                          ("No terminal outcome is available.",))
+    return AnswerPlan(
+        "failure-cause", "partial",
+        (Claim(
+            "terminal-status",
+            f"The recorded task outcome was {outcome.terminal_status}.",
+            SupportStatus.SUPPORTED,
+            outcome.evidence_ids,
+            "recorded terminal_status",
+            "execution",
+            EvidenceLevel.RECORDED_SEQUENCE,
+        ),),
+        ("The robot-visible evidence does not establish the physical cause of the failure.",),
+    )
+
+
+def plan_unsupported_counterfactual(episode: EpisodeRecord) -> AnswerPlan:
+    """Reject a hypothetical outcome when no intervention or causal model is recorded."""
+    return AnswerPlan(
+        "unsupported-counterfactual", "abstain", (),
+        ("The available evidence does not establish what would have happened under that "
+         "hypothetical change.",),
+    )
