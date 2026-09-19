@@ -81,6 +81,7 @@ class OutcomeRecord:
     timestamp: float
     events: tuple[ExecutionEvent, ...] = ()
     history_complete: bool = False
+    recovery_history_complete: bool | None = None
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -117,4 +118,3 @@ class AnswerPlan:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-

@@ -41,6 +41,7 @@ def episode_from_dict(raw: dict[str, Any]) -> EpisodeRecord:
             events=tuple(ExecutionEvent(**{**e, "evidence_ids": tuple(e.get("evidence_ids", ()))})
                          for e in outcome_raw.get("events", [])),
             history_complete=outcome_raw.get("history_complete", False),
+            recovery_history_complete=outcome_raw.get("recovery_history_complete"),
             evidence_ids=tuple(outcome_raw.get("evidence_ids", ())),
         )
     return EpisodeRecord(
@@ -52,4 +53,3 @@ def episode_from_dict(raw: dict[str, Any]) -> EpisodeRecord:
 def load_episode(path: str | Path) -> EpisodeRecord:
     with Path(path).open(encoding="utf-8") as stream:
         return episode_from_dict(json.load(stream))
-

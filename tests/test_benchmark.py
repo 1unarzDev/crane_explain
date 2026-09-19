@@ -103,6 +103,21 @@ def test_misleading_recovery_count_premise_is_rejected():
     assert "premise of 2 attempts is not supported" in output.text
 
 
+def test_recovery_count_completeness_is_independent_of_full_bt_history():
+    case_value = recovery_case("recovery_count")
+    raw = case_value.episode.to_dict()
+    raw["outcome"]["history_complete"] = False
+    raw["outcome"]["recovery_history_complete"] = True
+    exact_case = BenchmarkCase(
+        case_value.case_id, episode_from_dict(raw), case_value.prose, case_value.question,
+        case_value.question_kind, None, case_value.structured_fact_ids, case_value.prose_fact_ids,
+    )
+    output = run_condition(exact_case, Condition.E_TEMPLATE)
+    assert "Exactly 1 recovery attempt occurred" in output.text
+    assert "incomplete history" not in output.text
+    assert output.disposition == "full"
+
+
 def test_physical_cause_and_counterfactual_are_withheld():
     cause = run_condition(recovery_case("failure_cause"), Condition.E_TEMPLATE)
     hypothetical = run_condition(

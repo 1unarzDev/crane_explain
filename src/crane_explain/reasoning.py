@@ -99,8 +99,13 @@ def plan_recovery_count(episode: EpisodeRecord, premise_count: int | None = None
         event.attempt_id for event in episode.outcome.events
         if event.kind == "recovery_attempt" and event.attempt_id
     }
-    qualifier = "Exactly" if episode.outcome.history_complete else "At least"
-    verb = "occurred" if episode.outcome.history_complete else (
+    recovery_complete = (
+        episode.outcome.recovery_history_complete
+        if episode.outcome.recovery_history_complete is not None
+        else episode.outcome.history_complete
+    )
+    qualifier = "Exactly" if recovery_complete else "At least"
+    verb = "occurred" if recovery_complete else (
         "is recorded" if len(attempts) == 1 else "are recorded")
     proposition = f"{qualifier} {len(attempts)} recovery attempt{'s' if len(attempts) != 1 else ''} {verb}."
     evidence = tuple(event.id for event in episode.outcome.events if event.attempt_id in attempts)
@@ -127,13 +132,13 @@ def plan_recovery_count(episode: EpisodeRecord, premise_count: int | None = None
             "all distinct recorded recovery attempts have completed_success status",
             "execution", EvidenceLevel.RECORDED_SEQUENCE,
         ))
-    limitations = [] if episode.outcome.history_complete else [
+    limitations = [] if recovery_complete else [
         "The incomplete history does not establish the total number of attempts."]
     if premise_count is not None and premise_count != len(attempts):
         limitations.append(
             f"The question's premise of {premise_count} attempts is not supported by the record.")
     return AnswerPlan(
-        "recovery-count", "full" if episode.outcome.history_complete else "partial",
+        "recovery-count", "full" if recovery_complete else "partial",
         tuple(claims),
         tuple(limitations),
     )
