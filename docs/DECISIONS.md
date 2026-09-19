@@ -26,3 +26,14 @@
 - RQ impact: maximizes power and reduces risk that many paraphrases masquerade as sample size.
 - Validity risk: narrower external generalization evidence.
 
+## 2026-09-19 — treat Nav2 lifecycle readiness as capture quality, not robot failure
+
+- Decision: pilot/final runs must distinguish action-server startup rejection from a navigation
+  failure and record the startup margin/readiness procedure. The locally validated temporary
+  setting is `CRANE_FIXTURE_DELAY=15`; it is not yet a frozen collection rule.
+- Evidence: default-delay run timed out after two inactive-server rejections and only ~8.15 s of
+  accepted execution; changing only the pre-fixture delay produced terminal success.
+- Alternatives: call the timeout a mission failure; increase the action deadline; patch Nav2.
+- RQ impact: prevents infrastructure startup from contaminating failure labels and recovery counts.
+- Validity risk: a fixed delay can conceal host-load variation; explicit lifecycle readiness is
+  preferable before final collection.
