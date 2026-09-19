@@ -128,11 +128,25 @@ def test_physical_cause_and_counterfactual_are_withheld():
     assert hypothetical.disposition == "abstain"
 
 
-def test_successful_outcome_rejects_failure_cause_premise():
+def test_successful_outcome_preserves_recorded_intermediate_failure():
     case_value = recovery_case("failure_cause")
-    outcome = case_value.episode.outcome
     raw = case_value.episode.to_dict()
     raw["outcome"]["terminal_status"] = "succeeded"
+    successful = BenchmarkCase(
+        case_value.case_id, episode_from_dict(raw), case_value.prose, case_value.question,
+        case_value.question_kind, None, case_value.structured_fact_ids, case_value.prose_fact_ids,
+    )
+    output = run_condition(successful, Condition.E_TEMPLATE)
+    assert "intermediate FollowPath FAILURE" in output.text
+    assert "does not establish the physical cause" in output.text
+    assert "premise of a navigation failure is contradicted" not in output.text
+
+
+def test_successful_outcome_without_failure_rejects_failure_cause_premise():
+    case_value = recovery_case("failure_cause")
+    raw = case_value.episode.to_dict()
+    raw["outcome"]["terminal_status"] = "succeeded"
+    raw["outcome"]["events"] = []
     successful = BenchmarkCase(
         case_value.case_id, episode_from_dict(raw), case_value.prose, case_value.question,
         case_value.question_kind, None, case_value.structured_fact_ids, case_value.prose_fact_ids,

@@ -267,23 +267,44 @@ def plan_failure_cause(episode: EpisodeRecord) -> AnswerPlan:
         return AnswerPlan("failure-cause", "abstain", (),
                           ("No terminal outcome is available.",))
     status = outcome.terminal_status.lower()
-    limitation = (
-        "The question's premise of a navigation failure is contradicted by the recorded "
-        "successful outcome."
-        if status in {"success", "succeeded"}
-        else "The robot-visible evidence does not establish the physical cause of the failure."
+    recorded_failures = tuple(
+        event for event in outcome.events
+        if event.kind in {"follow_path_failure", "planning_no_valid_path"}
     )
-    return AnswerPlan(
-        "failure-cause", "partial",
-        (Claim(
-            "terminal-status",
-            f"The recorded task outcome was {outcome.terminal_status}.",
+    if status in {"success", "succeeded"} and not recorded_failures:
+        limitation = (
+            "The question's premise of a navigation failure is contradicted by the available "
+            "record, which contains a successful outcome and no recorded execution failure."
+        )
+    else:
+        limitation = (
+            "The robot-visible evidence does not establish the physical cause of the recorded "
+            "failure."
+        )
+    claims = [Claim(
+        "terminal-status",
+        f"The recorded task outcome was {outcome.terminal_status}.",
+        SupportStatus.SUPPORTED,
+        outcome.evidence_ids,
+        "recorded terminal_status",
+        "execution",
+        EvidenceLevel.RECORDED_SEQUENCE,
+    )]
+    follow_path_failures = tuple(
+        event for event in recorded_failures if event.kind == "follow_path_failure")
+    if follow_path_failures:
+        claims.append(Claim(
+            "intermediate-follow-path-failure",
+            "The record also contains an intermediate FollowPath FAILURE.",
             SupportStatus.SUPPORTED,
-            outcome.evidence_ids,
-            "recorded terminal_status",
+            tuple(event.id for event in follow_path_failures),
+            "recorded FollowPath failure transition",
             "execution",
             EvidenceLevel.RECORDED_SEQUENCE,
-        ),),
+        ))
+    return AnswerPlan(
+        "failure-cause", "partial",
+        tuple(claims),
         (limitation,),
     )
 
