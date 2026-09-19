@@ -104,6 +104,29 @@ def plan_recovery_count(episode: EpisodeRecord, premise_count: int | None = None
         "is recorded" if len(attempts) == 1 else "are recorded")
     proposition = f"{qualifier} {len(attempts)} recovery attempt{'s' if len(attempts) != 1 else ''} {verb}."
     evidence = tuple(event.id for event in episode.outcome.events if event.attempt_id in attempts)
+    claims = [Claim(
+        "recovery-count", proposition, SupportStatus.SUPPORTED, evidence,
+        "count distinct non-null attempt_id values", "execution",
+        EvidenceLevel.RECORDED_SEQUENCE,
+    )]
+    recorded = [
+        event for event in episode.outcome.events
+        if event.kind == "recovery_attempt" and event.attempt_id in attempts
+    ]
+    if attempts and len(recorded) == len(attempts) and all(
+            event.status == "completed_success" for event in recorded):
+        if len(attempts) == 1:
+            success_text = "The recorded recovery attempt returned SUCCESS."
+        elif len(attempts) == 2:
+            success_text = "Both recorded recovery attempts returned SUCCESS."
+        else:
+            success_text = f"All {len(attempts)} recorded recovery attempts returned SUCCESS."
+        claims.append(Claim(
+            "recovery-status", success_text, SupportStatus.SUPPORTED,
+            tuple(event.id for event in recorded),
+            "all distinct recorded recovery attempts have completed_success status",
+            "execution", EvidenceLevel.RECORDED_SEQUENCE,
+        ))
     limitations = [] if episode.outcome.history_complete else [
         "The incomplete history does not establish the total number of attempts."]
     if premise_count is not None and premise_count != len(attempts):
@@ -111,9 +134,7 @@ def plan_recovery_count(episode: EpisodeRecord, premise_count: int | None = None
             f"The question's premise of {premise_count} attempts is not supported by the record.")
     return AnswerPlan(
         "recovery-count", "full" if episode.outcome.history_complete else "partial",
-        (Claim("recovery-count", proposition, SupportStatus.SUPPORTED, evidence,
-               "count distinct non-null attempt_id values", "execution",
-               EvidenceLevel.RECORDED_SEQUENCE),),
+        tuple(claims),
         tuple(limitations),
     )
 
@@ -201,7 +222,7 @@ def plan_recovery_mechanism(episode: EpisodeRecord) -> AnswerPlan:
             ("The available transitions do not establish an ordered path into recovery.",),
         )
     return AnswerPlan(
-        "recovery-mechanism", "partial",
+        "recovery-mechanism", "full",
         (Claim(
             "recovery-mechanism",
             "The recorded FollowPath branch returned FAILURE, the controller-recovery "
@@ -223,6 +244,13 @@ def plan_failure_cause(episode: EpisodeRecord) -> AnswerPlan:
     if not outcome:
         return AnswerPlan("failure-cause", "abstain", (),
                           ("No terminal outcome is available.",))
+    status = outcome.terminal_status.lower()
+    limitation = (
+        "The question's premise of a navigation failure is contradicted by the recorded "
+        "successful outcome."
+        if status in {"success", "succeeded"}
+        else "The robot-visible evidence does not establish the physical cause of the failure."
+    )
     return AnswerPlan(
         "failure-cause", "partial",
         (Claim(
@@ -234,7 +262,7 @@ def plan_failure_cause(episode: EpisodeRecord) -> AnswerPlan:
             "execution",
             EvidenceLevel.RECORDED_SEQUENCE,
         ),),
-        ("The robot-visible evidence does not establish the physical cause of the failure.",),
+        (limitation,),
     )
 
 

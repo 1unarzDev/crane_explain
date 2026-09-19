@@ -36,7 +36,7 @@ def recovery_case(kind="recovery_mechanism", premise_count=None):
                 {"id": "guard-1", "kind": "controller_recovery_guard_success",
                  "timestamp": 2.0},
                 {"id": "wait-1", "kind": "recovery_attempt", "timestamp": 3.0,
-                 "attempt_id": "wait-1"},
+                 "attempt_id": "wait-1", "status": "completed_success"},
             ],
         },
     }
@@ -92,13 +92,14 @@ def test_checked_recovery_mechanism_preserves_physical_cause_limit():
     output = run_condition(recovery_case(), Condition.E_TEMPLATE)
     assert "FollowPath branch returned FAILURE" in output.text
     assert "does not establish the physical reason" in output.text
-    assert output.disposition == "partial"
+    assert output.disposition == "full"
 
 
 def test_misleading_recovery_count_premise_is_rejected():
     output = run_condition(
         recovery_case("recovery_count", premise_count=2), Condition.E_TEMPLATE)
     assert "At least 1 recovery attempt is recorded" in output.text
+    assert "The recorded recovery attempt returned SUCCESS" in output.text
     assert "premise of 2 attempts is not supported" in output.text
 
 
@@ -110,3 +111,16 @@ def test_physical_cause_and_counterfactual_are_withheld():
     assert cause.disposition == "partial"
     assert "does not establish what would have happened" in hypothetical.text
     assert hypothetical.disposition == "abstain"
+
+
+def test_successful_outcome_rejects_failure_cause_premise():
+    case_value = recovery_case("failure_cause")
+    outcome = case_value.episode.outcome
+    raw = case_value.episode.to_dict()
+    raw["outcome"]["terminal_status"] = "succeeded"
+    successful = BenchmarkCase(
+        case_value.case_id, episode_from_dict(raw), case_value.prose, case_value.question,
+        case_value.question_kind, None, case_value.structured_fact_ids, case_value.prose_fact_ids,
+    )
+    output = run_condition(successful, Condition.E_TEMPLATE)
+    assert "premise of a navigation failure is contradicted" in output.text
