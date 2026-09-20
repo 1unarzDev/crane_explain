@@ -31,4 +31,3 @@ def validate_episode(episode: EpisodeRecord) -> list[str]:
         if episode.decision and episode.outcome.timestamp < episode.decision.timestamp:
             errors.append("outcome predates decision")
     return errors
-

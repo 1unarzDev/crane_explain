@@ -37,8 +37,11 @@ def main() -> int:
         plan = plan_contrast(episode, args.alternative)
     text = render_template(plan)
     result = verify_final_text(plan, text)
-    print(json.dumps({"plan": plan.to_dict(), "text": text,
-                      "verification": result.__dict__}, indent=2))
+    print(
+        json.dumps(
+            {"plan": plan.to_dict(), "text": text, "verification": result.__dict__}, indent=2
+        )
+    )
     return 0 if result.accepted else 3
 
 

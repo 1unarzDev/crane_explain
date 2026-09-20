@@ -33,6 +33,38 @@ class EvidenceLevel(int, Enum):
     INTERVENTION = 4
 
 
+class ClaimClass(str, Enum):
+    OBSERVED = "observed"
+    DERIVED = "derived"
+    SOURCE_DEFINED = "source_defined"
+    MECHANISM_SUPPORTED = "mechanism_supported"
+    HYPOTHESIS = "hypothesis"
+    INTERVENTION_SUPPORTED = "intervention_supported"
+
+
+class SourceArtifactKind(str, Enum):
+    SOURCE_FILE = "source_file"
+    CONFIGURATION = "configuration"
+    BEHAVIOR_TREE_XML = "behavior_tree_xml"
+    PACKAGE_METADATA = "package_metadata"
+
+
+class ProvenanceRelationship(str, Enum):
+    GOVERNED_BY = "governed_by"
+    IMPLEMENTED_BY = "implemented_by"
+    CONFIGURED_BY = "configured_by"
+    EMITTED_BY = "emitted_by"
+    DEFINED_BY = "defined_by"
+
+
+class ProvenanceStrength(str, Enum):
+    EXACT_ARTIFACT = "exact_artifact"
+    VERSIONED_SOURCE = "versioned_source"
+    DECLARED_RUNTIME = "declared_runtime"
+    PLAUSIBLE_ONLY = "plausible_only"
+    UNRESOLVED = "unresolved"
+
+
 @dataclass(frozen=True)
 class EvidenceItem:
     id: str
@@ -41,6 +73,53 @@ class EvidenceItem:
     timestamp: float | None = None
     source: str = "record"
     consumed: bool | None = None
+
+
+@dataclass(frozen=True)
+class SourceArtifact:
+    id: str
+    kind: SourceArtifactKind
+    uri: str
+    content_sha256: str
+    repository: str | None = None
+    commit: str | None = None
+    package: str | None = None
+    version: str | None = None
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceAnchor:
+    id: str
+    artifact_id: str
+    locator: str
+    excerpt: str
+    excerpt_sha256: str
+    symbol: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    configuration_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RuntimeSourceLink:
+    id: str
+    runtime_evidence_ids: tuple[str, ...]
+    source_anchor_ids: tuple[str, ...]
+    relationship: ProvenanceRelationship
+    strength: ProvenanceStrength
+    rationale: str
+
+
+@dataclass(frozen=True)
+class ProvenanceBundle:
+    schema_version: str
+    artifacts: tuple[SourceArtifact, ...]
+    anchors: tuple[SourceAnchor, ...]
+    links: tuple[RuntimeSourceLink, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -72,6 +151,7 @@ class ExecutionEvent:
     timestamp: float
     status: str | None = None
     attempt_id: str | None = None
+    action_name: str | None = None
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -107,6 +187,8 @@ class Claim:
     temporal_scope: str
     evidence_level: EvidenceLevel
     assumptions: tuple[str, ...] = ()
+    claim_class: ClaimClass = ClaimClass.OBSERVED
+    source_anchor_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
