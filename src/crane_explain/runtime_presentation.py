@@ -56,11 +56,12 @@ def _evidence_matches_transition(item: EvidenceItem, transition: Mapping[str, An
     if item.kind != "bt_transition" or not isinstance(item.value, Mapping):
         return False
     value = item.value
+    recorded_node_uid = value.get("node_uid")
     return (
         value.get("node") == transition["node_name"]
         and value.get("from") == transition["previous_status"]
         and value.get("to") == transition["current_status"]
-        and value.get("node_uid") == transition["node_uid"]
+        and (recorded_node_uid is None or recorded_node_uid == transition["node_uid"])
         and item.timestamp is not None
         and abs(item.timestamp - _stamp_seconds(transition["event_stamp"])) < 1e-6
     )

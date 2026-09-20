@@ -141,7 +141,6 @@ def _capture():
                     "kind": "bt_transition",
                     "value": {
                         "node": "FollowPath",
-                        "node_uid": 4,
                         "from": "RUNNING",
                         "to": "FAILURE",
                     },
@@ -152,7 +151,6 @@ def _capture():
                     "kind": "bt_transition",
                     "value": {
                         "node": "WouldAControllerRecoveryHelp",
-                        "node_uid": 6,
                         "from": "IDLE",
                         "to": "SUCCESS",
                     },
@@ -163,7 +161,6 @@ def _capture():
                     "kind": "bt_transition",
                     "value": {
                         "node": "Wait",
-                        "node_uid": 7,
                         "from": "IDLE",
                         "to": "RUNNING",
                     },
