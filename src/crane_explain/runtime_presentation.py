@@ -178,6 +178,7 @@ def build_nav2_runtime_presentation(
     manifest: Mapping[str, Any],
     behavior_tree_xml: bytes,
     episode: EpisodeRecord,
+    runtime_manifest_payload: bytes | None = None,
 ) -> dict[str, Any]:
     """Build and validate one shared F/G/H runtime presentation.
 
@@ -193,6 +194,18 @@ def build_nav2_runtime_presentation(
     xml_sha256 = hashlib.sha256(behavior_tree_xml).hexdigest()
     if xml_sha256 != manifest.get("bt_xml_sha256"):
         raise PresentationError("captured BT XML does not match the manifest SHA-256")
+    runtime_provenance = None
+    if runtime_manifest_payload is not None:
+        retained_sha256 = hashlib.sha256(runtime_manifest_payload).hexdigest()
+        if retained_sha256 != manifest.get("runtime_manifest_sha256"):
+            raise PresentationError("runtime manifest does not match the capture manifest SHA-256")
+        runtime_provenance = json.loads(runtime_manifest_payload)
+        if runtime_provenance.get("schema") != "crane-runtime-provenance/v1":
+            raise PresentationError("unsupported runtime provenance schema")
+        if runtime_provenance.get("run_id") != manifest.get("run_id"):
+            raise PresentationError("runtime provenance and capture run IDs disagree")
+    elif manifest.get("runtime_manifest_sha256"):
+        raise PresentationError("capture manifest names a missing runtime manifest")
 
     indexed = [(_record_id(index), record) for index, record in enumerate(records)]
     harness = [
@@ -369,7 +382,9 @@ def build_nav2_runtime_presentation(
             f"capture-record-type-inventory:{record_type_inventory_hash}",
         ],
     }
-    return {
+    if runtime_provenance is not None:
+        field_provenance["runtime_provenance"] = ["runtime-manifest"]
+    presentation = {
         "schema": PRESENTATION_SCHEMA,
         "episode_id": episode_id,
         "capture": {
@@ -416,6 +431,9 @@ def build_nav2_runtime_presentation(
         },
         "field_provenance": field_provenance,
     }
+    if runtime_provenance is not None:
+        presentation["runtime_provenance"] = runtime_provenance
+    return presentation
 
 
 _QUESTION_REQUIREMENTS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -478,9 +496,11 @@ def audit_fgh_information_parity(
     if presentation.get("schema") != PRESENTATION_SCHEMA:
         raise PresentationError("unsupported runtime-presentation schema")
     try:
-        requirements = _QUESTION_REQUIREMENTS[question_kind]
+        requirements = list(_QUESTION_REQUIREMENTS[question_kind])
     except KeyError as error:
         raise PresentationError(f"unknown question kind: {question_kind}") from error
+    if "runtime_provenance" in presentation:
+        requirements.append(("runtime-configuration-identity", "runtime_provenance"))
     units = []
     for unit_id, path in requirements:
         value = _lookup(presentation, path)

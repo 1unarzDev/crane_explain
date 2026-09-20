@@ -16,7 +16,8 @@ passive Nav2 capture separately. Evaluator-only truth must never enter model-vis
 - **IMPLEMENTED, TESTED:** immutable typed evidence records, validation, checked contrastive and
   recovery-count plans, conservative deterministic realization, strict final-text checking,
   Dock/Slalom regression cases A–E, bounded content-hashed runtime-to-source resolution, explicit
-  claim classes, parity-audited runtime presentations, and A–H benchmark routing (41 tests).
+  claim classes, parity-audited runtime/configuration presentations, and A–H benchmark routing
+  (42 tests).
 - **TESTED:** exact retained Nav2 BT artifact linking and one development-only, information-parity
   audited F/G/H agent pilot.
 - **NOT_RUN:** parity-frozen multi-episode provenance evaluation.

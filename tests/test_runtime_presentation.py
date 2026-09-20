@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import pytest
 
@@ -239,6 +240,37 @@ def test_presentation_rejects_bt_xml_hash_mismatch():
 
     with pytest.raises(PresentationError, match="does not match"):
         build_nav2_runtime_presentation(records, manifest, xml, episode)
+
+
+def test_runtime_manifest_is_hash_checked_and_added_to_parity_units():
+    records, manifest, xml, episode = _capture()
+    runtime = json.dumps(
+        {
+            "schema": "crane-runtime-provenance/v1",
+            "run_id": "run-1",
+            "artifacts": [
+                {
+                    "role": "nav2_parameter_file",
+                    "content_sha256": "1" * 64,
+                    "repository_commit": "2" * 40,
+                }
+            ],
+        },
+        sort_keys=True,
+    ).encode()
+    manifest["runtime_manifest_sha256"] = hashlib.sha256(runtime).hexdigest()
+
+    presentation = build_nav2_runtime_presentation(
+        records, manifest, xml, episode, runtime
+    )
+    audit = audit_fgh_information_parity(presentation, "recovery-mechanism")
+
+    assert presentation["runtime_provenance"]["run_id"] == "run-1"
+    assert audit["units"][-1]["id"] == "runtime-configuration-identity"
+    assert audit["units"][-1]["raw_derivation_sources"] == ["runtime-manifest"]
+
+    with pytest.raises(PresentationError, match="does not match"):
+        build_nav2_runtime_presentation(records, manifest, xml, episode, runtime + b" ")
 
 
 def test_parity_audit_rejects_missing_raw_traceability():
