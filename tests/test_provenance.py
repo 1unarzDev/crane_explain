@@ -138,8 +138,66 @@ def test_recovery_claim_requires_runtime_and_exact_source_support_for_promotion(
     assert "exact source/configuration anchor" in without_source.not_established[0]
     assert with_source.claims[0].claim_class == ClaimClass.MECHANISM_SUPPORTED
     assert with_source.claims[0].source_anchor_ids == ("bt-wait-node",)
-    assert with_source.claims[1].claim_class == ClaimClass.SOURCE_DEFINED
-    assert "Exact retained source anchor bt-wait-node" in with_source.claims[1].proposition
+    assert with_source.claims[1].claim_class == ClaimClass.DERIVED
+    assert "follow-path-failure at 1.000000 s" in with_source.claims[1].proposition
+    assert "Wait invocation wait-1 at 3.000000 s" in with_source.claims[1].proposition
+    assert with_source.claims[2].claim_class == ClaimClass.SOURCE_DEFINED
+    assert "Tools/Performance/nav2_land_progress_recovery.xml" in (
+        with_source.claims[2].proposition
+    )
+    assert "c559932a5ebef00bfa7752511799fd904e5c9dbe" in (
+        with_source.claims[2].proposition
+    )
+    assert "14939b78c72149b9c71b3806f2d3af63fc5de48c8bd9d07f0d13b55563f48520" in (
+        with_source.claims[2].proposition
+    )
+
+
+def test_recovery_sequence_count_is_exact_only_for_complete_recovery_history():
+    events = []
+    for index, base in ((1, 1.0), (2, 4.0)):
+        events.extend(
+            (
+                {
+                    "id": f"failure-{index}",
+                    "kind": "follow_path_failure",
+                    "timestamp": base,
+                },
+                {
+                    "id": f"guard-{index}",
+                    "kind": "controller_recovery_guard_success",
+                    "timestamp": base + 1,
+                },
+                {
+                    "id": f"wait-{index}",
+                    "kind": "recovery_attempt",
+                    "timestamp": base + 2,
+                    "attempt_id": f"wait-attempt-{index}",
+                },
+            )
+        )
+
+    def episode(complete: bool):
+        return episode_from_dict(
+            {
+                "schema_version": "crane-explain-episode/v1",
+                "episode_id": "count-qualification",
+                "evidence": [],
+                "outcome": {
+                    "terminal_status": "aborted",
+                    "timestamp": 10.0,
+                    "events": events,
+                    "recovery_history_complete": complete,
+                },
+            }
+        )
+
+    incomplete = plan_recovery_mechanism(episode(False)).claims[1].proposition
+    complete = plan_recovery_mechanism(episode(True)).claims[1].proposition
+
+    assert incomplete.startswith("2 ordered recovery-entry sequences are recorded")
+    assert "available history" in incomplete
+    assert complete.startswith("Exactly 2 ordered recovery-entry sequences are recorded")
 
 
 def test_provenance_bundle_round_trips_through_its_portable_json_shape():

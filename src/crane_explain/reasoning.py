@@ -355,20 +355,43 @@ def plan_recovery_mechanism(
                 ),
             ),
         )
-    failure = failures[0]
-    guard = next((event for event in guards if event.timestamp >= failure.timestamp), None)
-    recovery = next(
-        (event for event in recoveries if guard is not None and event.timestamp >= guard.timestamp),
-        None,
-    )
-    if guard is None or recovery is None:
+    sequences = []
+    used_guard_ids: set[str] = set()
+    used_recovery_ids: set[str] = set()
+    for failure in failures:
+        guard = next(
+            (
+                event
+                for event in guards
+                if event.id not in used_guard_ids and event.timestamp >= failure.timestamp
+            ),
+            None,
+        )
+        recovery = next(
+            (
+                event
+                for event in recoveries
+                if guard is not None
+                and event.id not in used_recovery_ids
+                and event.timestamp >= guard.timestamp
+            ),
+            None,
+        )
+        if guard is None or recovery is None:
+            continue
+        sequences.append((failure, guard, recovery))
+        used_guard_ids.add(guard.id)
+        used_recovery_ids.add(recovery.id)
+    if not sequences:
         return AnswerPlan(
             "recovery-mechanism",
             "abstain",
             (),
             ("The available transitions do not establish an ordered path into recovery.",),
         )
-    runtime_evidence_ids = (failure.id, guard.id, recovery.id)
+    runtime_evidence_ids = tuple(
+        event.id for sequence in sequences for event in sequence
+    )
     source_anchor_ids = (
         mechanism_source_anchor_ids(provenance, set(runtime_evidence_ids)) if provenance else ()
     )
@@ -399,13 +422,66 @@ def plan_recovery_mechanism(
             source_anchor_ids=source_anchor_ids,
         )
     ]
+    details = []
+    for failure, guard, recovery in sequences:
+        attempt_label = recovery.attempt_id or "unknown-attempt"
+        details.append(
+            f"{failure.id} at {failure.timestamp:.6f} s, {guard.id} at "
+            f"{guard.timestamp:.6f} s, and Wait invocation {attempt_label} at "
+            f"{recovery.timestamp:.6f} s"
+        )
+    recovery_history_complete = (
+        episode.outcome is not None and episode.outcome.recovery_history_complete is True
+    )
+    if len(details) == 1:
+        detail_proposition = f"The first recorded ordered sequence was {details[0]}."
+    elif recovery_history_complete:
+        detail_proposition = (
+            f"Exactly {len(details)} ordered recovery-entry sequences are recorded: "
+            f"{'; '.join(details)}."
+        )
+    else:
+        detail_proposition = (
+            f"{len(details)} ordered recovery-entry sequences are recorded in the available "
+            f"history: {'; '.join(details)}."
+        )
+    claims.append(
+        Claim(
+            "recovery-mechanism-detail",
+            detail_proposition,
+            SupportStatus.SUPPORTED,
+            runtime_evidence_ids,
+            "sort and pair the first FollowPath failure, subsequent guard success, and "
+            "subsequent Wait invocation by timestamp",
+            "execution",
+            EvidenceLevel.RECORDED_SEQUENCE,
+            claim_class=ClaimClass.DERIVED,
+            source_anchor_ids=source_anchor_ids,
+        )
+    )
     if source_anchor_ids:
         joined_anchors = ", ".join(source_anchor_ids)
+        source_description = f"Exact retained source anchor {joined_anchors}"
+        if provenance:
+            selected_anchors = [
+                anchor for anchor in provenance.anchors if anchor.id in source_anchor_ids
+            ]
+            artifact_ids = {anchor.artifact_id for anchor in selected_anchors}
+            artifacts = [
+                artifact for artifact in provenance.artifacts if artifact.id in artifact_ids
+            ]
+            if artifacts:
+                artifact = artifacts[0]
+                identity = artifact.path or artifact.uri
+                commit = f" at commit {artifact.commit}" if artifact.commit else ""
+                source_description = (
+                    f"Retained {artifact.kind.value} {identity}{commit} "
+                    f"(SHA-256 {artifact.content_sha256}), source anchor {joined_anchors},"
+                )
         claims.append(
             Claim(
                 "recovery-source-provenance",
-                f"Exact retained source anchor {joined_anchors} governs that recorded control-flow "
-                "relationship.",
+                f"{source_description} governs that recorded control-flow relationship.",
                 SupportStatus.SUPPORTED,
                 runtime_evidence_ids,
                 "validated runtime-to-source links cover every transition in the mechanism claim",
