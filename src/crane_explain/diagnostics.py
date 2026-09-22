@@ -62,6 +62,42 @@ class GoalTerminationObservation:
 
 
 @dataclass(frozen=True)
+class GeometricRouteObservation:
+    """Robot-visible inputs for a bounded route-restriction diagnosis.
+
+    ``direct_route_has_lethal_cell`` and ``grid_connected`` are outputs of an independently
+    versioned audit of the retained Nav2 costmap, not evaluator geometry.  Connectivity applies
+    only to the retained grid at its timestamp.  The trajectory is delivered odometry and does
+    not by itself prove why Nav2 selected a particular command.
+    """
+
+    episode_id: str
+    evidence_ids: tuple[str, ...]
+    frame: str
+    action_status: str
+    direct_route_has_lethal_cell: bool | None
+    direct_route_minimum_clearance_m: float | None
+    direct_route_first_lethal_x_m: float | None
+    direct_route_first_lethal_y_m: float | None
+    grid_connected: bool | None
+    connectivity_origin: str
+    maximum_lateral_deviation_m: float | None
+    maximum_forward_progress_m: float | None
+    goal_distance_m: float
+    successful_plan_count: int | None
+    action_wall_seconds: float | None
+    configured_deadline_seconds: float | None
+    configured_robot_radius_m: float
+    configured_inflation_radius_m: float
+    costmap_resolution_m: float
+    costmap_snapshot_sha256: str
+    costmap_snapshot_timestamp_s: float | None
+    terminal_transition_observed: bool
+    computation_version: str = "geometric-route-restriction-v1"
+    source_anchor_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DiagnosticResult:
     schema_version: str
     diagnostic_id: str
@@ -81,6 +117,7 @@ class DiagnosticResult:
     limits: str
     next_check: str
     source_anchor_ids: tuple[str, ...]
+    decisive_measurement_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -318,14 +355,264 @@ def diagnose_terminal_stopping_margin(
     )
 
 
+def diagnose_geometric_route_restriction(
+    observation: GeometricRouteObservation,
+) -> DiagnosticResult:
+    """Diagnose a retained planner-grid restriction without claiming hidden geometry.
+
+    A supported result requires a lethal cell on the requested direct route plus observed route
+    deviation.  Grid connectivity determines whether the result may say that the retained model
+    was disconnected or must instead report an available modeled detour.  Timing near a configured
+    deadline can reconstruct a likely execution mechanism, but an unobserved terminal transition is
+    explicitly qualified.
+    """
+
+    numeric = {
+        "direct_route_minimum_clearance_m": observation.direct_route_minimum_clearance_m,
+        "maximum_lateral_deviation_m": observation.maximum_lateral_deviation_m,
+        "maximum_forward_progress_m": observation.maximum_forward_progress_m,
+        "goal_distance_m": observation.goal_distance_m,
+        "action_wall_seconds": observation.action_wall_seconds,
+        "configured_deadline_seconds": observation.configured_deadline_seconds,
+        "configured_robot_radius_m": observation.configured_robot_radius_m,
+        "configured_inflation_radius_m": observation.configured_inflation_radius_m,
+        "costmap_resolution_m": observation.costmap_resolution_m,
+        "costmap_snapshot_timestamp_s": observation.costmap_snapshot_timestamp_s,
+    }
+    for name, value in numeric.items():
+        _require_nonnegative(name, value)
+    if not observation.evidence_ids:
+        raise ValueError("at least one robot-visible evidence ID is required")
+    if not observation.costmap_snapshot_sha256:
+        raise ValueError("costmap snapshot SHA-256 is required")
+    if observation.successful_plan_count is not None and observation.successful_plan_count < 0:
+        raise ValueError("successful_plan_count must be nonnegative")
+
+    measurements: list[DiagnosticMeasurement] = [
+        DiagnosticMeasurement(
+            id="costmap_snapshot_sha256",
+            value=observation.costmap_snapshot_sha256,
+            unit="sha256",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+            timestamp_s=observation.costmap_snapshot_timestamp_s,
+        ),
+        DiagnosticMeasurement(
+            id="configured_robot_radius",
+            value=observation.configured_robot_radius_m,
+            unit="m",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="configured_inflation_radius",
+            value=observation.configured_inflation_radius_m,
+            unit="m",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="costmap_resolution",
+            value=observation.costmap_resolution_m,
+            unit="m/cell",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+        ),
+    ]
+    optional_measurements = (
+        ("direct_route_minimum_clearance", observation.direct_route_minimum_clearance_m, "m"),
+        ("maximum_lateral_deviation", observation.maximum_lateral_deviation_m, "m"),
+        ("maximum_forward_progress", observation.maximum_forward_progress_m, "m"),
+        ("goal_distance", observation.goal_distance_m, "m"),
+        ("action_wall_time", observation.action_wall_seconds, "s"),
+        ("configured_deadline", observation.configured_deadline_seconds, "s"),
+    )
+    for measurement_id, value, unit in optional_measurements:
+        if value is not None:
+            measurements.append(
+                DiagnosticMeasurement(
+                    id=measurement_id,
+                    value=value,
+                    unit=unit,
+                    frame=observation.frame,
+                    evidence_ids=observation.evidence_ids,
+                )
+            )
+    if observation.direct_route_first_lethal_x_m is not None:
+        measurements.append(
+            DiagnosticMeasurement(
+                id="first_lethal_route_x",
+                value=observation.direct_route_first_lethal_x_m,
+                unit="m",
+                frame=observation.frame,
+                evidence_ids=observation.evidence_ids,
+                timestamp_s=observation.costmap_snapshot_timestamp_s,
+            )
+        )
+    if observation.direct_route_first_lethal_y_m is not None:
+        measurements.append(
+            DiagnosticMeasurement(
+                id="first_lethal_route_y",
+                value=observation.direct_route_first_lethal_y_m,
+                unit="m",
+                frame=observation.frame,
+                evidence_ids=observation.evidence_ids,
+                timestamp_s=observation.costmap_snapshot_timestamp_s,
+            )
+        )
+
+    common = dict(
+        schema_version="crane-diagnostic-result-v1",
+        diagnostic_id=f"{observation.episode_id}:geometric-route-restriction",
+        episode_id=observation.episode_id,
+        mechanism="geometric_route_restriction",
+        measurements=tuple(measurements),
+        computation=(
+            "decode and hash-check retained costmap; sample requested direct route against "
+            "cost>=253; test 8-connected traversal below cost 253; summarize delivered odometry"
+        ),
+        computation_version=observation.computation_version,
+        assumptions=(
+            "Costmap values at or above 253 are non-traversable for this audit.",
+            "The retained cost field already incorporates the configured robot radius and inflation.",
+            "Connectivity applies only to the retained grid, frame, and timestamp.",
+            "Delivered odometry records motion but is not proof of Nav2's internal consumed state.",
+        ),
+        supporting_evidence=observation.evidence_ids,
+        causal_language_level=CausalLanguageLevel.EXECUTION_MECHANISM,
+        source_anchor_ids=observation.source_anchor_ids,
+        decisive_measurement_ids=(
+            "direct_route_minimum_clearance",
+            "maximum_lateral_deviation",
+            "action_wall_time",
+            "configured_deadline",
+        ),
+    )
+
+    missing = []
+    if observation.direct_route_has_lethal_cell is None:
+        missing.append("direct-route cost classification")
+    if observation.grid_connected is None:
+        missing.append("retained-grid connectivity")
+    if observation.maximum_lateral_deviation_m is None:
+        missing.append("measured lateral trajectory extent")
+    if observation.action_wall_seconds is None:
+        missing.append("action wall time")
+    if observation.configured_deadline_seconds is None:
+        missing.append("configured task deadline")
+    if missing:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.INSUFFICIENT,
+            diagnosis="The geometric route restriction cannot be assessed from the retained evidence.",
+            contradictory_evidence=(),
+            unresolved_alternatives=(
+                "The direct route may have been clear or restricted in the relevant planner model.",
+                "The terminal action mechanism remains unresolved.",
+            ),
+            failure_chain="A terminal action result is retained, but the geometry-to-motion chain is incomplete.",
+            limits=f"Missing decisive evidence: {', '.join(missing)}.",
+            next_check="Retain a hash-checked global costmap, synchronized trajectory, and exact task deadline.",
+        )
+
+    assert observation.maximum_lateral_deviation_m is not None
+    assert observation.action_wall_seconds is not None
+    assert observation.configured_deadline_seconds is not None
+    deadline_delta = abs(observation.action_wall_seconds - observation.configured_deadline_seconds)
+    measurements.append(
+        DiagnosticMeasurement(
+            id="absolute_deadline_timing_difference",
+            value=deadline_delta,
+            unit="s",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        )
+    )
+    common["measurements"] = tuple(measurements)
+
+    supported = (
+        observation.direct_route_has_lethal_cell is True
+        and observation.maximum_lateral_deviation_m > observation.configured_inflation_radius_m
+        and observation.action_status.lower() == "aborted"
+        and deadline_delta <= max(2.0, observation.configured_deadline_seconds * 0.05)
+    )
+    if not supported:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.NOT_TRIGGERED,
+            diagnosis="The retained measurements do not establish the route-restriction-and-deadline mechanism.",
+            contradictory_evidence=observation.evidence_ids,
+            unresolved_alternatives=(
+                "A different geometric, planning, control, or terminal mechanism may apply.",
+            ),
+            failure_chain="At least one required geometric, motion, status, or timing condition was not observed.",
+            limits="This check does not infer hidden obstacle identity or universal route infeasibility.",
+            next_check="Inspect the failed diagnostic gate against the synchronized grid and trajectory.",
+        )
+
+    connection = (
+        "the retained grid still contained a traversable connection"
+        if observation.grid_connected
+        else "the retained grid contained no traversable connection between the audited endpoints"
+    )
+    lethal_location = ""
+    if observation.direct_route_first_lethal_x_m is not None:
+        lethal_location = f" near x={observation.direct_route_first_lethal_x_m:.2f} m"
+    diagnosis = (
+        f"The retained navigation model marked the requested direct route as non-traversable"
+        f"{lethal_location}, while {connection}. The robot deviated "
+        f"{observation.maximum_lateral_deviation_m:.2f} m laterally, and the action aborted "
+        f"{deadline_delta:.2f} s from its configured {observation.configured_deadline_seconds:.1f} s deadline."
+    )
+    plan_text = (
+        f"{observation.successful_plan_count} successful planning updates were recorded"
+        if observation.successful_plan_count is not None
+        else "planning updates were recorded"
+    )
+    return DiagnosticResult(
+        **common,
+        disposition=DiagnosticDisposition.SUPPORTED,
+        diagnosis=diagnosis,
+        contradictory_evidence=(
+            "retained-grid-connectivity" if observation.grid_connected else ""
+        ,) if observation.grid_connected else (),
+        unresolved_alternatives=(
+            "The robot-visible evidence does not identify the hidden obstacle semantic ID.",
+            "The retained snapshot does not prove the exact grid state consumed by every planning update.",
+            "The missing terminal BT transition prevents direct observation of the deadline decorator's final tick."
+            if not observation.terminal_transition_observed
+            else "No unresolved terminal-transition observation gap remains.",
+        ),
+        failure_chain=(
+            f"The direct route intersected lethal costmap cells, {plan_text}, and delivered odometry "
+            f"recorded a substantial detour. The action then failed at {observation.action_wall_seconds:.2f} s, "
+            "consistent with the source-qualified task deadline rather than recovery exhaustion."
+        ),
+        limits=(
+            "This establishes a restriction in the retained navigation model and a deadline-aligned abort. "
+            "It does not prove global physical infeasibility, a unique obstacle identity, or that the retained "
+            "snapshot was the exact state consumed by every planner invocation."
+        ),
+        next_check=(
+            "Retain time-aligned global-costmap snapshots and full planned paths around the first deviation "
+            "to distinguish a feasible but too-long detour from changing map state."
+        ),
+    )
+
+
 def render_diagnostic(result: DiagnosticResult) -> str:
     """Render the checked result without introducing additional propositions."""
 
+    selected = (
+        tuple(item for item in result.measurements if item.id in result.decisive_measurement_ids)
+        if result.decisive_measurement_ids
+        else result.measurements
+    )
     evidence = "; ".join(
         f"{item.id}={item.value:.4f} {item.unit}"
         if isinstance(item.value, float)
         else f"{item.id}={item.value} {item.unit}"
-        for item in result.measurements
+        for item in selected
     )
     alternatives = " ".join(result.unresolved_alternatives)
     return "\n".join(

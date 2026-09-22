@@ -1,6 +1,8 @@
 from crane_explain.diagnostics import (
     DiagnosticDisposition,
+    GeometricRouteObservation,
     GoalTerminationObservation,
+    diagnose_geometric_route_restriction,
     diagnose_terminal_stopping_margin,
     render_diagnostic,
     verify_diagnostic_text,
@@ -80,3 +82,63 @@ def test_invalid_negative_measurement_is_rejected():
         assert "post_result_coast_m" in str(error)
     else:
         raise AssertionError("negative distance was accepted")
+
+
+def _route_observation(**overrides):
+    values = {
+        "episode_id": "land-blockage-global-002",
+        "evidence_ids": ("global-costmap", "delivered-odometry", "action-result"),
+        "frame": "odom",
+        "action_status": "aborted",
+        "direct_route_has_lethal_cell": True,
+        "direct_route_minimum_clearance_m": 0.0,
+        "direct_route_first_lethal_x_m": 8.8,
+        "direct_route_first_lethal_y_m": 0.0,
+        "grid_connected": True,
+        "connectivity_origin": "action-result-pose",
+        "maximum_lateral_deviation_m": 2.7046,
+        "maximum_forward_progress_m": 6.9489,
+        "goal_distance_m": 18.0,
+        "successful_plan_count": 69,
+        "action_wall_seconds": 70.8602,
+        "configured_deadline_seconds": 70.0,
+        "configured_robot_radius_m": 0.22,
+        "configured_inflation_radius_m": 0.55,
+        "costmap_resolution_m": 0.1,
+        "costmap_snapshot_sha256": "0" * 64,
+        "costmap_snapshot_timestamp_s": 74.039,
+        "terminal_transition_observed": False,
+        "source_anchor_ids": ("bt-timeout-source", "nav2-costmap-config"),
+    }
+    values.update(overrides)
+    return GeometricRouteObservation(**values)
+
+
+def test_geometric_route_diagnosis_preserves_connected_detour_distinction():
+    result = diagnose_geometric_route_restriction(_route_observation())
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    assert "still contained a traversable connection" in result.diagnosis
+    assert "global physical infeasibility" in result.limits
+    assert "recovery exhaustion" in result.failure_chain
+    assert "retained-grid-connectivity" in result.contradictory_evidence
+    rendered = render_diagnostic(result)
+    assert "maximum_lateral_deviation" in rendered
+    assert "costmap_resolution" not in rendered
+
+
+def test_geometric_route_diagnosis_fails_to_insufficient_without_connectivity():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(grid_connected=None)
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert "retained-grid connectivity" in result.limits
+
+
+def test_geometric_route_diagnosis_does_not_trigger_without_lethal_route_cell():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(direct_route_has_lethal_cell=False)
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
