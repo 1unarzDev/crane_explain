@@ -51,8 +51,23 @@ def test_missing_measured_speed_fails_to_insufficient():
     )
 
     assert result.disposition == DiagnosticDisposition.INSUFFICIENT
-    assert "independently measured speed" in result.limits
+    assert result.mechanism == "post_return_motion_exceeded_position_margin"
+    assert "only 0.026 m of positional task margin" in result.diagnosis
+    assert "grew by 0.185 m" in result.diagnosis
+    assert "Missing return speed" in result.diagnosis
+    assert "does not establish" in result.limits
+
+
+def test_missing_speed_and_settled_error_withholds_positional_chain():
+    result = diagnose_terminal_stopping_margin(
+        _observation(measured_speed_at_return_mps=None, settled_error_m=None)
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert result.mechanism == "terminal_stopping_margin"
     assert "cannot be assessed" in result.diagnosis
+    assert "independently measured speed" in result.limits
+    assert "settled pose error" in result.limits
 
 
 def test_settling_inside_task_tolerance_does_not_trigger_diagnosis():

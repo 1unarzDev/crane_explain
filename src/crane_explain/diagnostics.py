@@ -258,7 +258,7 @@ def diagnose_terminal_stopping_margin(
         measurements=tuple(measurements),
         computation="task_margin_at_return = task_tolerance - return_error; "
         "radial_error_growth = settled_error - return_error",
-        computation_version="terminal-stopping-margin-v1",
+        computation_version="terminal-stopping-margin-v2",
         assumptions=(
             "Pose errors use the same goal, metric, and coordinate frame.",
             "Speed and pose are independently measured rather than command-derived feedback.",
@@ -267,6 +267,73 @@ def diagnose_terminal_stopping_margin(
         causal_language_level=CausalLanguageLevel.EXECUTION_MECHANISM,
         source_anchor_ids=observation.source_anchor_ids,
     )
+
+    positional_chain_available = (
+        observation.post_result_coast_m is not None
+        and observation.settled_error_m is not None
+    )
+    if observation.measured_speed_at_return_mps is None and positional_chain_available:
+        assert observation.post_result_coast_m is not None
+        assert observation.settled_error_m is not None
+        margin = observation.task_acceptance_tolerance_m - observation.action_return_error_m
+        error_growth = observation.settled_error_m - observation.action_return_error_m
+        measurements.extend(
+            (
+                _measurement("task_margin_at_return", margin, "m", observation),
+                _measurement("radial_error_growth_after_return", error_growth, "m", observation),
+            )
+        )
+        common["measurements"] = tuple(measurements)
+        positional_chain_supported = (
+            observation.action_status.lower() == "succeeded"
+            and observation.action_return_error_m <= observation.configured_goal_tolerance_m
+            and observation.settled_error_m > observation.task_acceptance_tolerance_m
+            and error_growth > margin
+        )
+        if positional_chain_supported:
+            partial_common = {
+                **common,
+                "mechanism": "post_return_motion_exceeded_position_margin",
+            }
+            return DiagnosticResult(
+                **partial_common,
+                disposition=DiagnosticDisposition.INSUFFICIENT,
+                diagnosis=(
+                    f"The action returned with only {margin:.3f} m of positional task margin, "
+                    f"then measured pose error grew by {error_growth:.3f} m and settled outside "
+                    "the task tolerance. Missing return speed prevents determining whether the "
+                    "configured stopped-speed criterion was physically satisfied."
+                ),
+                supporting_evidence=observation.evidence_ids,
+                contradictory_evidence=(),
+                unresolved_alternatives=(
+                    "The retained evidence does not establish the measured speed at action return.",
+                    "The physical source of the residual motion remains unresolved.",
+                ),
+                failure_chain=(
+                    f"The action reported success at {observation.action_return_error_m:.3f} m "
+                    f"error, leaving {margin:.3f} m inside the task limit. After return, the "
+                    f"platform moved {observation.post_result_coast_m:.3f} m and settled at "
+                    f"{observation.settled_error_m:.3f} m error, outside the "
+                    f"{observation.task_acceptance_tolerance_m:.3f} m task limit."
+                ),
+                limits=(
+                    "The positional failure chain is supported, but independently measured speed "
+                    "at return is missing. The evidence therefore does not establish that the "
+                    "physical platform satisfied the configured stopped-speed threshold or identify "
+                    "why residual motion occurred."
+                ),
+                next_check=(
+                    "Record synchronized independently measured speed and controller state at the "
+                    "action-success transition through settling."
+                ),
+                decisive_measurement_ids=(
+                    "task_margin_at_return",
+                    "post_result_displacement",
+                    "settled_error",
+                    "radial_error_growth_after_return",
+                ),
+            )
 
     if missing:
         return DiagnosticResult(
