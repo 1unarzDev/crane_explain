@@ -1,6 +1,8 @@
 from crane_explain.diagnostics import (
     BehaviorTreeTransition,
     CausalLanguageLevel,
+    CommandMotionObservation,
+    CommandMotionWindow,
     DiagnosticDisposition,
     GeometricRouteObservation,
     GoalTerminationObservation,
@@ -8,6 +10,7 @@ from crane_explain.diagnostics import (
     RecoveryExecutionObservation,
     RecoveryInvocationRecord,
     diagnose_geometric_route_restriction,
+    diagnose_command_motion_discrepancy,
     diagnose_retained_grid_disconnection,
     diagnose_recovery_execution_sequence,
     diagnose_terminal_stopping_margin,
@@ -104,6 +107,88 @@ def test_invalid_negative_measurement_is_rejected():
         assert "post_result_coast_m" in str(error)
     else:
         raise AssertionError("negative distance was accepted")
+
+
+def _command_motion_observation(**overrides):
+    windows = []
+    for index in range(5):
+        windows.append(
+            CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.26)
+        )
+    for index in range(5, 9):
+        windows.append(
+            CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.0)
+        )
+    values = {
+        "episode_id": "diagnostic-motion-dev-cm-001",
+        "evidence_ids": ("events-sha256:" + "a" * 64, "bt-policy-sha256:" + "b" * 64),
+        "command_frame": "base_link-command-convention",
+        "measured_frame": "odom",
+        "action_status": "aborted",
+        "windows": tuple(windows),
+        "raw_command_sample_count": 90,
+        "raw_odometry_sample_count": 360,
+        "window_seconds": 1.0,
+        "minimum_command_samples_per_window": 5,
+        "minimum_odometry_samples_per_window": 20,
+        "calibration_window_count": 5,
+        "minimum_commanded_speed_mps": 0.4,
+        "minimum_healthy_measured_speed_mps": 0.1,
+        "maximum_discrepancy_response_ratio": 0.2,
+        "minimum_consecutive_discrepancy_windows": 3,
+        "follow_path_failure_count": 2,
+        "follow_path_attempt_count": 3,
+        "source_qualified_recovery_count": 2,
+        "source_anchor_ids": ("bt-policy-sha256:" + "b" * 64,),
+    }
+    values.update(overrides)
+    return CommandMotionObservation(**values)
+
+
+def test_command_motion_diagnosis_supports_sustained_response_loss():
+    result = diagnose_command_motion_discrepancy(_command_motion_observation())
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    assert "median 0.800 m/s" in result.diagnosis
+    assert "median 0.000 m/s" in result.diagnosis
+    assert "2 source-qualified Wait" in result.failure_chain
+    assert "third FollowPath attempt" in result.failure_chain
+    assert "actuator acceptance" in result.limits
+    assert "mobility constraint" in result.unresolved_alternatives[0]
+    rendered = render_diagnostic(result)
+    assert verify_diagnostic_text(result, rendered).accepted
+    assert not verify_diagnostic_text(result, rendered + " A motor failed.").accepted
+
+
+def test_command_motion_nominal_response_does_not_trigger():
+    nominal = tuple(
+        CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.26)
+        for index in range(9)
+    )
+    result = diagnose_command_motion_discrepancy(
+        _command_motion_observation(windows=nominal)
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert "required consecutive low-response windows" in result.diagnosis
+
+
+def test_command_motion_missing_command_stream_is_insufficient():
+    result = diagnose_command_motion_discrepancy(
+        _command_motion_observation(raw_command_sample_count=0, windows=())
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert "delivered Nav2 command stream" in result.diagnosis
+
+
+def test_command_motion_missing_odometry_stream_is_insufficient():
+    result = diagnose_command_motion_discrepancy(
+        _command_motion_observation(raw_odometry_sample_count=0, windows=())
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert "independently delivered odometry stream" in result.diagnosis
 
 
 def _route_observation(**overrides):

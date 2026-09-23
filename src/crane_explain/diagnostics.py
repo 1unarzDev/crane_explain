@@ -8,6 +8,7 @@ measured platform to settle inside a separately declared task tolerance.
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
@@ -180,6 +181,51 @@ class RecoveryExecutionObservation:
     physical_cause_established: bool
     source_anchor_ids: tuple[str, ...] = ()
     computation_version: str = "recovery-execution-sequence-v1"
+
+
+@dataclass(frozen=True)
+class CommandMotionWindow:
+    """One fixed robot-visible command/odometry comparison window."""
+
+    index: int
+    start_offset_s: float
+    end_offset_s: float
+    command_sample_count: int
+    odometry_sample_count: int
+    median_commanded_planar_speed_mps: float | None
+    median_measured_planar_speed_mps: float | None
+
+
+@dataclass(frozen=True)
+class CommandMotionObservation:
+    """Robot-visible inputs for a bounded command-to-motion discrepancy check.
+
+    Command delivery does not prove actuator acceptance, and delivered odometry does not prove
+    Nav2 consumption.  This contract therefore supports an execution-layer discrepancy without
+    assigning it to a motor, collision, slip, or another unique physical cause.
+    """
+
+    episode_id: str
+    evidence_ids: tuple[str, ...]
+    command_frame: str
+    measured_frame: str
+    action_status: str
+    windows: tuple[CommandMotionWindow, ...]
+    raw_command_sample_count: int
+    raw_odometry_sample_count: int
+    window_seconds: float
+    minimum_command_samples_per_window: int
+    minimum_odometry_samples_per_window: int
+    calibration_window_count: int
+    minimum_commanded_speed_mps: float
+    minimum_healthy_measured_speed_mps: float
+    maximum_discrepancy_response_ratio: float
+    minimum_consecutive_discrepancy_windows: int
+    follow_path_failure_count: int
+    follow_path_attempt_count: int
+    source_qualified_recovery_count: int
+    source_anchor_ids: tuple[str, ...] = ()
+    computation_version: str = "command-motion-discrepancy-v1"
 
 
 @dataclass(frozen=True)
@@ -1433,6 +1479,323 @@ def diagnose_recovery_execution_sequence(
         next_check=(
             "Time-align retained plans and hash-checked costmap observations around the first "
             "planner failure to test a physical route-restriction mechanism."
+        ),
+    )
+
+
+def diagnose_command_motion_discrepancy(
+    observation: CommandMotionObservation,
+) -> DiagnosticResult:
+    """Identify a sustained loss of measured response to nonzero delivered commands.
+
+    The first sufficiently sampled command-active windows calibrate the observed healthy response.
+    Later windows trigger only when their measured-motion/healthy-response ratio stays at or below
+    the declared threshold for the declared consecutive-window count.  The computation deliberately
+    does not infer why the command-to-motion chain diverged.
+    """
+
+    if not observation.evidence_ids:
+        raise ValueError("at least one robot-visible evidence ID is required")
+    positive = {
+        "window_seconds": observation.window_seconds,
+        "minimum_command_samples_per_window": observation.minimum_command_samples_per_window,
+        "minimum_odometry_samples_per_window": observation.minimum_odometry_samples_per_window,
+        "calibration_window_count": observation.calibration_window_count,
+        "minimum_commanded_speed_mps": observation.minimum_commanded_speed_mps,
+        "minimum_healthy_measured_speed_mps": observation.minimum_healthy_measured_speed_mps,
+        "minimum_consecutive_discrepancy_windows": (
+            observation.minimum_consecutive_discrepancy_windows
+        ),
+    }
+    for name, value in positive.items():
+        if not math.isfinite(float(value)) or float(value) <= 0.0:
+            raise ValueError(f"{name} must be finite and positive")
+    ratio_threshold = observation.maximum_discrepancy_response_ratio
+    if not math.isfinite(ratio_threshold) or not 0.0 <= ratio_threshold < 1.0:
+        raise ValueError("maximum_discrepancy_response_ratio must be in [0, 1)")
+    for name, value in (
+        ("raw_command_sample_count", observation.raw_command_sample_count),
+        ("raw_odometry_sample_count", observation.raw_odometry_sample_count),
+        ("follow_path_failure_count", observation.follow_path_failure_count),
+        ("follow_path_attempt_count", observation.follow_path_attempt_count),
+        ("source_qualified_recovery_count", observation.source_qualified_recovery_count),
+    ):
+        if value < 0:
+            raise ValueError(f"{name} must be nonnegative")
+
+    previous_index = -1
+    for window in observation.windows:
+        if window.index <= previous_index:
+            raise ValueError("command-motion windows must have strictly increasing indexes")
+        previous_index = window.index
+        if window.end_offset_s <= window.start_offset_s:
+            raise ValueError("command-motion window end must follow its start")
+        for value in (
+            window.median_commanded_planar_speed_mps,
+            window.median_measured_planar_speed_mps,
+        ):
+            _require_nonnegative("window speed", value)
+
+    common = dict(
+        schema_version="crane-diagnostic-result-v1",
+        diagnostic_id=f"{observation.episode_id}:command-motion-discrepancy",
+        episode_id=observation.episode_id,
+        mechanism="command_to_motion_discrepancy",
+        computation=(
+            "fixed wall-time windows; healthy_response = median(initial sufficiently sampled "
+            "command-active window medians); response_ratio = later measured planar speed / "
+            "healthy_response; require bounded consecutive low-response windows"
+        ),
+        computation_version=observation.computation_version,
+        assumptions=(
+            "Command and odometry receipt clocks are comparable within the capture process.",
+            "Planar odometry speed is an independent measured-motion signal, not command-derived NavigateToPose feedback.",
+            "The initial sufficiently sampled command-active windows represent a healthy response for this run.",
+            "Source-qualified recovery counts use the retained behavior-tree policy and transition stream.",
+        ),
+        causal_language_level=CausalLanguageLevel.EXECUTION_MECHANISM,
+        source_anchor_ids=observation.source_anchor_ids,
+    )
+
+    missing = []
+    if observation.raw_command_sample_count == 0:
+        missing.append("delivered Nav2 command stream")
+    if observation.raw_odometry_sample_count == 0:
+        missing.append("independently delivered odometry stream")
+    if missing:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.INSUFFICIENT,
+            diagnosis="The command-to-motion discrepancy cannot be assessed because "
+            + " and ".join(missing)
+            + " is missing.",
+            measurements=(),
+            supporting_evidence=observation.evidence_ids,
+            contradictory_evidence=(),
+            unresolved_alternatives=(),
+            failure_chain="The retained streams do not support a time-aligned command-response chain.",
+            limits="Missing robot-visible motion-chain evidence prevents this diagnostic.",
+            next_check="Record synchronized delivered commands and independently measured planar odometry.",
+        )
+
+    eligible = [
+        window
+        for window in observation.windows
+        if window.command_sample_count >= observation.minimum_command_samples_per_window
+        and window.odometry_sample_count >= observation.minimum_odometry_samples_per_window
+        and window.median_commanded_planar_speed_mps is not None
+        and window.median_measured_planar_speed_mps is not None
+        and window.median_commanded_planar_speed_mps
+        >= observation.minimum_commanded_speed_mps
+    ]
+    calibration = eligible[: observation.calibration_window_count]
+    if len(calibration) < observation.calibration_window_count:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.INSUFFICIENT,
+            diagnosis="The command-to-motion discrepancy cannot be assessed because too few sufficiently sampled command-active windows were retained for healthy-response calibration.",
+            measurements=(),
+            supporting_evidence=observation.evidence_ids,
+            contradictory_evidence=(),
+            unresolved_alternatives=(),
+            failure_chain="A calibrated command-response baseline could not be reconstructed.",
+            limits="The retained stream does not establish a healthy within-run motion response.",
+            next_check="Retain the initial command-active interval with synchronized command and odometry samples.",
+        )
+
+    healthy_speed = statistics.median(
+        float(window.median_measured_planar_speed_mps) for window in calibration
+    )
+    healthy_command = statistics.median(
+        float(window.median_commanded_planar_speed_mps) for window in calibration
+    )
+    calibration_end_index = calibration[-1].index
+    if healthy_speed < observation.minimum_healthy_measured_speed_mps:
+        measurement = DiagnosticMeasurement(
+            id="calibrated_healthy_planar_speed",
+            value=healthy_speed,
+            unit="m/s",
+            frame=observation.measured_frame,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(calibration[0].start_offset_s, calibration[-1].end_offset_s),
+        )
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.INSUFFICIENT,
+            diagnosis="The retained initial windows did not establish the minimum healthy measured-motion response required for comparison.",
+            measurements=(measurement,),
+            supporting_evidence=observation.evidence_ids,
+            contradictory_evidence=(),
+            unresolved_alternatives=(),
+            failure_chain="No calibrated healthy command-to-motion baseline was established.",
+            limits="A low response without a healthy reference cannot establish a later response loss.",
+            next_check="Capture a nominal command-active interval under the same platform and timing configuration.",
+            decisive_measurement_ids=("calibrated_healthy_planar_speed",),
+        )
+
+    qualifying = {
+        window.index: window
+        for window in eligible
+        if window.index > calibration_end_index
+        and float(window.median_measured_planar_speed_mps) / healthy_speed
+        <= ratio_threshold
+    }
+    runs: list[list[CommandMotionWindow]] = []
+    current: list[CommandMotionWindow] = []
+    for index in sorted(qualifying):
+        window = qualifying[index]
+        if current and index != current[-1].index + 1:
+            runs.append(current)
+            current = []
+        current.append(window)
+    if current:
+        runs.append(current)
+    qualifying_runs = [
+        run
+        for run in runs
+        if len(run) >= observation.minimum_consecutive_discrepancy_windows
+    ]
+
+    baseline_measurements = (
+        DiagnosticMeasurement(
+            id="calibrated_healthy_commanded_planar_speed",
+            value=healthy_command,
+            unit="m/s",
+            frame=observation.command_frame,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(calibration[0].start_offset_s, calibration[-1].end_offset_s),
+        ),
+        DiagnosticMeasurement(
+            id="calibrated_healthy_planar_speed",
+            value=healthy_speed,
+            unit="m/s",
+            frame=observation.measured_frame,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(calibration[0].start_offset_s, calibration[-1].end_offset_s),
+        ),
+    )
+    if not qualifying_runs:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.NOT_TRIGGERED,
+            diagnosis=(
+                "The retained streams did not contain the required consecutive low-response "
+                "windows after healthy-response calibration."
+            ),
+            measurements=baseline_measurements,
+            supporting_evidence=observation.evidence_ids,
+            contradictory_evidence=("required-sustained-low-response-sequence-not-observed",),
+            unresolved_alternatives=(),
+            failure_chain="No supported command-to-motion discrepancy failure chain was observed.",
+            limits="This negative check applies only to the retained synchronized interval and declared thresholds.",
+            next_check="Inspect other physical or execution mechanisms if navigation still failed.",
+            decisive_measurement_ids=(
+                "calibrated_healthy_commanded_planar_speed",
+                "calibrated_healthy_planar_speed",
+            ),
+        )
+
+    # Use the earliest qualifying sequence so the stated failure chain cannot be inverted by a
+    # longer post-recovery segment. Later qualifying runs remain represented in the input windows.
+    run = sorted(qualifying_runs, key=lambda item: item[0].index)[0]
+    discrepancy_command = statistics.median(
+        float(window.median_commanded_planar_speed_mps) for window in run
+    )
+    discrepancy_motion = statistics.median(
+        float(window.median_measured_planar_speed_mps) for window in run
+    )
+    response_ratio = discrepancy_motion / healthy_speed
+    duration = run[-1].end_offset_s - run[0].start_offset_s
+    measurements = baseline_measurements + (
+        DiagnosticMeasurement(
+            id="discrepancy_commanded_planar_speed",
+            value=discrepancy_command,
+            unit="m/s",
+            frame=observation.command_frame,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(run[0].start_offset_s, run[-1].end_offset_s),
+        ),
+        DiagnosticMeasurement(
+            id="discrepancy_measured_planar_speed",
+            value=discrepancy_motion,
+            unit="m/s",
+            frame=observation.measured_frame,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(run[0].start_offset_s, run[-1].end_offset_s),
+        ),
+        DiagnosticMeasurement(
+            id="measured_response_ratio",
+            value=response_ratio,
+            unit="ratio",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(run[0].start_offset_s, run[-1].end_offset_s),
+        ),
+        DiagnosticMeasurement(
+            id="sustained_discrepancy_duration",
+            value=duration,
+            unit="s",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+            interval_s=(run[0].start_offset_s, run[-1].end_offset_s),
+        ),
+        DiagnosticMeasurement(
+            id="follow_path_failures",
+            value=observation.follow_path_failure_count,
+            unit="count",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="source_qualified_wait_recoveries",
+            value=observation.source_qualified_recovery_count,
+            unit="count",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+    )
+    attempt_clause = (
+        f"A third FollowPath attempt was active before the navigation action {observation.action_status.lower()}."
+        if observation.follow_path_attempt_count >= 3
+        else f"The navigation action {observation.action_status.lower()}."
+    )
+    return DiagnosticResult(
+        **common,
+        disposition=DiagnosticDisposition.SUPPORTED,
+        diagnosis=(
+            "The retained command and odometry streams establish a sustained command-to-motion "
+            f"discrepancy: Nav2 continued publishing a median {discrepancy_command:.3f} m/s "
+            "planar command while independently delivered odometry recorded a median "
+            f"{discrepancy_motion:.3f} m/s planar motion response for {duration:.1f} s."
+        ),
+        measurements=measurements,
+        supporting_evidence=observation.evidence_ids,
+        contradictory_evidence=(),
+        unresolved_alternatives=(
+            "The evidence does not distinguish actuator rejection, a mobility constraint, collision or obstruction, slip, or another execution-layer cause.",
+        ),
+        failure_chain=(
+            f"After the response loss, FollowPath recorded {observation.follow_path_failure_count} "
+            f"failures and {observation.source_qualified_recovery_count} source-qualified Wait "
+            f"recovery invocations ran. {attempt_clause}"
+        ),
+        limits=(
+            "Delivered Nav2 commands do not prove actuator acceptance, and delivered odometry does "
+            "not prove Nav2 consumption. The evidence establishes the discrepancy and its recorded "
+            "execution sequence, but not a unique physical cause."
+        ),
+        next_check=(
+            "Record downstream accepted actuation or actuator feedback together with contact, "
+            "clearance, and wheel-motion evidence over the discrepancy interval."
+        ),
+        decisive_measurement_ids=(
+            "calibrated_healthy_planar_speed",
+            "discrepancy_commanded_planar_speed",
+            "discrepancy_measured_planar_speed",
+            "measured_response_ratio",
+            "sustained_discrepancy_duration",
+            "follow_path_failures",
+            "source_qualified_wait_recoveries",
         ),
     )
 
