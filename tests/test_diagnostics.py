@@ -186,6 +186,11 @@ def test_geometric_route_diagnosis_rejects_false_failure_premise_on_success():
     assert "direct_route_minimum_clearance=1.9400 m" in rendered
     assert "maximum_lateral_deviation=0.0000 m" in rendered
     assert "action aborted" not in rendered
+    repeated_limit = (
+        "A successful result does not prove that no temporary route constraint or control "
+        "difficulty occurred during execution."
+    )
+    assert rendered.count(repeated_limit) == 1
 
 
 def test_geometric_route_success_rejects_false_premise_without_costmap_cells():

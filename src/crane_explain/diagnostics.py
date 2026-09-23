@@ -830,13 +830,20 @@ def render_diagnostic(result: DiagnosticResult) -> str:
         else f"{item.id}={item.value} {item.unit}"
         for item in selected
     )
-    alternatives = " ".join(result.unresolved_alternatives)
+    alternatives = " ".join(
+        alternative
+        for alternative in result.unresolved_alternatives
+        if alternative.strip() not in result.limits
+    )
+    limits_and_alternatives = " ".join(
+        part for part in (result.limits, alternatives) if part
+    )
     return "\n".join(
         (
             f"Diagnosis: {result.diagnosis}",
             f"Decisive evidence: {evidence}. Evidence IDs: {', '.join(result.supporting_evidence)}.",
             f"Failure chain: {result.failure_chain}",
-            f"Limits and next check: {result.limits} {alternatives} Next check: {result.next_check}",
+            f"Limits and next check: {limits_and_alternatives} Next check: {result.next_check}",
         )
     )
 
