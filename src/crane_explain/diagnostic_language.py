@@ -215,6 +215,17 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
         require(limits, ("physical",), "physical-cause limitation")
     elif mechanism == "command_to_motion_discrepancy":
         if disposition == DiagnosticDisposition.SUPPORTED:
+            action_status = next(
+                (
+                    str(item.value).lower()
+                    for item in result.measurements
+                    if item.id == "action_status"
+                ),
+                "",
+            )
+            response_recovery_recorded = any(
+                item.id == "recovered_measured_planar_speed" for item in result.measurements
+            )
             require(diagnosis, ("command-to-motion", "command and odometry"),
                     "command-to-motion discrepancy")
             require(all_text, ("command",), "delivered command evidence")
@@ -222,7 +233,13 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
                     "independently measured motion evidence")
             require(failure, ("followpath", "follow path"), "controller failure sequence")
             require(failure, ("wait",), "source-qualified recovery sequence")
-            require(failure, ("abort",), "terminal action outcome")
+            if action_status == "succeeded":
+                require(failure, ("succeeded", "success"), "successful terminal action outcome")
+                if response_recovery_recorded:
+                    require(failure, ("recover", "resum", "restor", "later measured response"),
+                            "measured-response recovery")
+            else:
+                require(failure, ("abort", "failed"), "terminal action outcome")
             require(limits, ("actuator acceptance", "accepted by the actuator"),
                     "actuator-acceptance limit")
             require(limits, ("unique physical cause", "does not distinguish", "unresolved"),

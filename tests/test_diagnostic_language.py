@@ -88,11 +88,19 @@ def test_bounded_verifier_accepts_existing_checked_template_without_repair():
     assert not verification.repair_applied
 
 
-def _command_motion_result(*, action_status="aborted", measured_after=0.0):
+def _command_motion_result(*, action_status="aborted", measured_after=0.0, recovered=False):
+    later = [
+        CommandMotionWindow(i, i, i + 1, 10, 40, 0.8, measured_after)
+        for i in range(5, 9)
+    ]
+    if recovered:
+        later.extend(
+            CommandMotionWindow(i, i, i + 1, 10, 40, 0.8, 0.26)
+            for i in range(9, 12)
+        )
     windows = tuple(
         [CommandMotionWindow(i, i, i + 1, 10, 40, 0.8, 0.26) for i in range(5)]
-        + [CommandMotionWindow(i, i, i + 1, 10, 40, 0.8, measured_after)
-           for i in range(5, 9)]
+        + later
     )
     from crane_explain.diagnostics import diagnose_command_motion_discrepancy
 
@@ -158,6 +166,13 @@ def test_bounded_verifier_accepts_command_motion_checked_template():
 
 def test_bounded_verifier_accepts_command_motion_nominal_template():
     result = _command_motion_result(action_status="succeeded", measured_after=0.26)
+    verification = verify_bounded_diagnostic_text(result, render_diagnostic(result))
+
+    assert verification.accepted, verification.reasons
+
+
+def test_bounded_verifier_accepts_supported_discrepancy_with_recovered_motion_and_success():
+    result = _command_motion_result(action_status="succeeded", recovered=True)
     verification = verify_bounded_diagnostic_text(result, render_diagnostic(result))
 
     assert verification.accepted, verification.reasons

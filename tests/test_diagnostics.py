@@ -160,6 +160,35 @@ def test_command_motion_diagnosis_supports_sustained_response_loss():
     assert not verify_diagnostic_text(result, rendered + " A motor failed.").accepted
 
 
+def test_command_motion_diagnosis_reports_measured_response_recovery_before_success():
+    windows = list(_command_motion_observation().windows)
+    windows.extend(
+        CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.26)
+        for index in range(9, 12)
+    )
+    result = diagnose_command_motion_discrepancy(
+        _command_motion_observation(
+            windows=tuple(windows),
+            action_status="succeeded",
+            follow_path_failure_count=1,
+            follow_path_attempt_count=2,
+            source_qualified_recovery_count=1,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    recovered = {item.id: item for item in result.measurements}
+    assert recovered["recovered_measured_planar_speed"].value == 0.26
+    assert recovered["recovered_response_ratio"].value == 1.0
+    assert "measured response recovered" in result.diagnosis
+    assert "navigation action succeeded" in result.failure_chain
+    assert "later measured response" in result.failure_chain
+    assert "recovered_measured_planar_speed" in result.decisive_measurement_ids
+    rendered = render_diagnostic(result)
+    assert "recovered_measured_planar_speed=0.2600 m/s" in rendered
+    assert verify_diagnostic_text(result, rendered).accepted
+
+
 def test_command_motion_nominal_response_does_not_trigger():
     nominal = tuple(
         CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.26)

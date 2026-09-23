@@ -225,7 +225,7 @@ class CommandMotionObservation:
     follow_path_attempt_count: int
     source_qualified_recovery_count: int
     source_anchor_ids: tuple[str, ...] = ()
-    computation_version: str = "command-motion-discrepancy-v1"
+    computation_version: str = "command-motion-discrepancy-v2"
 
 
 @dataclass(frozen=True)
@@ -1544,7 +1544,10 @@ def diagnose_command_motion_discrepancy(
         computation=(
             "fixed wall-time windows; healthy_response = median(initial sufficiently sampled "
             "command-active window medians); response_ratio = later measured planar speed / "
-            "healthy_response; require bounded consecutive low-response windows"
+            "healthy_response; require bounded consecutive low-response windows; after the "
+            "earliest discrepancy, report the first sufficiently sampled command-active window "
+            "whose measured speed is again above both the low-response boundary and the minimum "
+            "healthy measured speed"
         ),
         computation_version=observation.computation_version,
         assumptions=(
@@ -1804,6 +1807,18 @@ def diagnose_command_motion_discrepancy(
     )
     response_ratio = discrepancy_motion / healthy_speed
     duration = run[-1].end_offset_s - run[0].start_offset_s
+    recovery_window = next(
+        (
+            window
+            for window in eligible
+            if window.index > run[-1].index
+            and float(window.median_measured_planar_speed_mps)
+            >= observation.minimum_healthy_measured_speed_mps
+            and float(window.median_measured_planar_speed_mps) / healthy_speed
+            > ratio_threshold
+        ),
+        None,
+    )
     measurements = baseline_measurements + (
         DiagnosticMeasurement(
             id="discrepancy_commanded_planar_speed",
@@ -1838,6 +1853,42 @@ def diagnose_command_motion_discrepancy(
             interval_s=(run[0].start_offset_s, run[-1].end_offset_s),
         ),
     )
+    recovery_measurement_ids: tuple[str, ...] = ()
+    recovery_clause = ""
+    if recovery_window is not None:
+        recovered_motion = float(recovery_window.median_measured_planar_speed_mps)
+        recovered_ratio = recovered_motion / healthy_speed
+        recovery_interval = (
+            recovery_window.start_offset_s,
+            recovery_window.end_offset_s,
+        )
+        measurements += (
+            DiagnosticMeasurement(
+                id="recovered_measured_planar_speed",
+                value=recovered_motion,
+                unit="m/s",
+                frame=observation.measured_frame,
+                evidence_ids=observation.evidence_ids,
+                interval_s=recovery_interval,
+            ),
+            DiagnosticMeasurement(
+                id="recovered_response_ratio",
+                value=recovered_ratio,
+                unit="ratio",
+                frame=None,
+                evidence_ids=observation.evidence_ids,
+                interval_s=recovery_interval,
+            ),
+        )
+        recovery_measurement_ids = (
+            "recovered_measured_planar_speed",
+            "recovered_response_ratio",
+        )
+        recovery_clause = (
+            " A later sufficiently sampled command-active window recorded that the measured "
+            f"response recovered to {recovered_motion:.3f} m/s "
+            f"({recovered_ratio:.3f} of the calibrated healthy response)."
+        )
     attempt_clause = (
         f"A third FollowPath attempt was active before the navigation action {observation.action_status.lower()}."
         if observation.follow_path_attempt_count >= 3
@@ -1851,6 +1902,7 @@ def diagnose_command_motion_discrepancy(
             f"discrepancy: Nav2 continued publishing a median {discrepancy_command:.3f} m/s "
             "planar command while independently delivered odometry recorded a median "
             f"{discrepancy_motion:.3f} m/s planar motion response for {duration:.1f} s."
+            + recovery_clause
         ),
         measurements=measurements,
         supporting_evidence=observation.evidence_ids,
@@ -1861,7 +1913,13 @@ def diagnose_command_motion_discrepancy(
         failure_chain=(
             f"After the response loss, FollowPath recorded {observation.follow_path_failure_count} "
             f"failures and {observation.source_qualified_recovery_count} source-qualified Wait "
-            f"recovery invocations ran. {attempt_clause}"
+            "recovery invocations ran."
+            + (
+                " The later measured response recovered before the navigation action "
+                f"{observation.action_status.lower()}."
+                if recovery_window is not None
+                else f" {attempt_clause}"
+            )
         ),
         limits=(
             "Delivered Nav2 commands do not prove actuator acceptance, and delivered odometry does "
@@ -1880,7 +1938,8 @@ def diagnose_command_motion_discrepancy(
             "sustained_discrepancy_duration",
             "follow_path_failures",
             "source_qualified_wait_recoveries",
-        ),
+        )
+        + recovery_measurement_ids,
     )
 
 
