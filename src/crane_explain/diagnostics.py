@@ -1101,8 +1101,15 @@ def diagnose_recovery_execution_sequence(
             "The hash-pinned exact-name policy classifies recovery leaves, not every feedback increment.",
             "Software execution ordering does not identify the physical cause of planning failure.",
         ),
+        # Keep the user-facing citation list concise. The decisive measurements above retain the
+        # complete transition-level derivation for audit and reconstruction.
         supporting_evidence=tuple(
-            dict.fromkeys((*observation.evidence_ids, *context_ids))
+            dict.fromkeys(
+                (
+                    *observation.evidence_ids,
+                    *(item.invocation_id for item in qualified),
+                )
+            )
         ),
         contradictory_evidence=tuple(rejected_reasons),
         unresolved_alternatives=(
