@@ -100,6 +100,38 @@ class GeometricRouteObservation:
 
 
 @dataclass(frozen=True)
+class GridDisconnectionObservation:
+    """Robot-visible inputs for a bounded retained-grid disconnection diagnosis.
+
+    This contract is for planner failures where a hash-checked navigation grid can be tested
+    directly.  It establishes only a disconnection in that retained model at its timestamp.  It
+    does not identify a physical obstacle, prove that the planner consumed this exact snapshot,
+    or prove that no route existed outside the retained grid.
+    """
+
+    episode_id: str
+    evidence_ids: tuple[str, ...]
+    frame: str
+    action_status: str
+    start_x_m: float
+    start_y_m: float
+    goal_x_m: float
+    goal_y_m: float
+    start_cost: int
+    goal_cost: int
+    blocked_cost_threshold: int
+    grid_connected_below_threshold: bool | None
+    planner_failure_message_count: int | None
+    planner_error_text: str | None
+    action_wall_seconds: float | None
+    costmap_resolution_m: float
+    costmap_snapshot_sha256: str
+    costmap_snapshot_timestamp_s: float | None
+    source_anchor_ids: tuple[str, ...] = ()
+    computation_version: str = "retained-grid-disconnection-v1"
+
+
+@dataclass(frozen=True)
 class BehaviorTreeTransition:
     """One retained, goal-scoped BehaviorTreeLog status transition."""
 
@@ -863,6 +895,213 @@ def diagnose_geometric_route_restriction(
         next_check=(
             "Retain time-aligned global-costmap snapshots and full planned paths around the first deviation "
             "to distinguish a feasible but too-long detour from changing map state."
+        ),
+    )
+
+
+def diagnose_retained_grid_disconnection(
+    observation: GridDisconnectionObservation,
+) -> DiagnosticResult:
+    """Diagnose a planner-model disconnection while withholding physical overclaiming."""
+
+    numeric = {
+        "action_wall_seconds": observation.action_wall_seconds,
+        "costmap_resolution_m": observation.costmap_resolution_m,
+        "costmap_snapshot_timestamp_s": observation.costmap_snapshot_timestamp_s,
+    }
+    for name, value in numeric.items():
+        _require_nonnegative(name, value)
+    if not observation.evidence_ids:
+        raise ValueError("at least one robot-visible evidence ID is required")
+    if not observation.costmap_snapshot_sha256:
+        raise ValueError("costmap snapshot SHA-256 is required")
+    if observation.blocked_cost_threshold < 1 or observation.blocked_cost_threshold > 255:
+        raise ValueError("blocked_cost_threshold must be in [1, 255]")
+    for name, value in (("start_cost", observation.start_cost), ("goal_cost", observation.goal_cost)):
+        if value < 0 or value > 255:
+            raise ValueError(f"{name} must be in [0, 255]")
+    if (
+        observation.planner_failure_message_count is not None
+        and observation.planner_failure_message_count < 0
+    ):
+        raise ValueError("planner_failure_message_count must be nonnegative")
+
+    measurements = (
+        DiagnosticMeasurement(
+            id="action_status",
+            value=observation.action_status.lower(),
+            unit="status",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="start_grid_cost",
+            value=observation.start_cost,
+            unit="cost",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+            timestamp_s=observation.costmap_snapshot_timestamp_s,
+        ),
+        DiagnosticMeasurement(
+            id="goal_grid_cost",
+            value=observation.goal_cost,
+            unit="cost",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+            timestamp_s=observation.costmap_snapshot_timestamp_s,
+        ),
+        DiagnosticMeasurement(
+            id="blocked_cost_threshold",
+            value=observation.blocked_cost_threshold,
+            unit="cost",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="retained_grid_connected_below_threshold",
+            value=(
+                "unknown"
+                if observation.grid_connected_below_threshold is None
+                else str(observation.grid_connected_below_threshold).lower()
+            ),
+            unit="boolean",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+            timestamp_s=observation.costmap_snapshot_timestamp_s,
+        ),
+        DiagnosticMeasurement(
+            id="planner_failure_messages",
+            value=(
+                "unknown"
+                if observation.planner_failure_message_count is None
+                else observation.planner_failure_message_count
+            ),
+            unit="messages",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="costmap_resolution",
+            value=observation.costmap_resolution_m,
+            unit="m/cell",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="costmap_snapshot_sha256",
+            value=observation.costmap_snapshot_sha256,
+            unit="sha256",
+            frame=observation.frame,
+            evidence_ids=observation.evidence_ids,
+            timestamp_s=observation.costmap_snapshot_timestamp_s,
+        ),
+    )
+    common = dict(
+        schema_version="crane-diagnostic-result-v1",
+        diagnostic_id=f"{observation.episode_id}:retained-grid-disconnection",
+        episode_id=observation.episode_id,
+        mechanism="retained_navigation_model_disconnection",
+        measurements=measurements,
+        computation=(
+            "decode and hash-check retained costmap; map result and goal poses to cells; test "
+            "8-connected traversal through cells below the declared blocked-cost threshold; "
+            "count exact retained planner-failure log messages"
+        ),
+        computation_version=observation.computation_version,
+        assumptions=(
+            "The retained grid metadata and pose coordinates use the same frame.",
+            "Cells at or above the declared threshold are excluded by this audit.",
+            "Connectivity applies only to the retained grid and timestamp.",
+            "A retained log message records software output, not a unique physical cause.",
+        ),
+        supporting_evidence=observation.evidence_ids,
+        causal_language_level=CausalLanguageLevel.EXECUTION_MECHANISM,
+        source_anchor_ids=observation.source_anchor_ids,
+        decisive_measurement_ids=(
+            "start_grid_cost",
+            "goal_grid_cost",
+            "blocked_cost_threshold",
+            "retained_grid_connected_below_threshold",
+            "planner_failure_messages",
+            "action_status",
+        ),
+    )
+
+    missing = []
+    if observation.grid_connected_below_threshold is None:
+        missing.append("retained-grid connectivity")
+    if observation.planner_failure_message_count is None:
+        missing.append("planner-failure log count")
+    if not observation.planner_error_text:
+        missing.append("exact planner error text")
+    if missing:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.INSUFFICIENT,
+            diagnosis="The retained navigation-model disconnection cannot be established.",
+            contradictory_evidence=(),
+            unresolved_alternatives=(
+                "The planner may have failed because of geometry, transient map state, or another planning condition.",
+            ),
+            failure_chain="The action result is retained, but the model-to-planner failure chain is incomplete.",
+            limits=f"Missing decisive evidence: {', '.join(missing)}.",
+            next_check="Retain a hash-checked grid and the exact planner result for the same goal-scoped interval.",
+        )
+
+    assert observation.planner_failure_message_count is not None
+    assert observation.planner_error_text is not None
+    supported = (
+        observation.action_status.lower() == "aborted"
+        and observation.start_cost < observation.blocked_cost_threshold
+        and observation.goal_cost >= observation.blocked_cost_threshold
+        and observation.grid_connected_below_threshold is False
+        and observation.planner_failure_message_count > 0
+    )
+    if not supported:
+        return DiagnosticResult(
+            **common,
+            disposition=DiagnosticDisposition.NOT_TRIGGERED,
+            diagnosis="The retained measurements do not establish a navigation-model disconnection linked to the abort.",
+            contradictory_evidence=observation.evidence_ids,
+            unresolved_alternatives=(
+                "A different geometric, planning, control, or terminal mechanism may apply.",
+            ),
+            failure_chain="At least one required grid, planner-message, or action-result condition was not observed.",
+            limits="This check does not infer a physical obstacle or a route outside the retained grid.",
+            next_check="Inspect the failed diagnostic gate against a synchronized grid and planner result.",
+        )
+
+    return DiagnosticResult(
+        **common,
+        disposition=DiagnosticDisposition.SUPPORTED,
+        diagnosis=(
+            f"The retained navigation model contained no 8-connected route below cost "
+            f"{observation.blocked_cost_threshold} from the recorded result pose to the goal. "
+            f"The goal cell cost was {observation.goal_cost}, and "
+            f"{observation.planner_failure_message_count} matching planner-failure messages were "
+            "retained before the action aborted."
+        ),
+        contradictory_evidence=(),
+        unresolved_alternatives=(
+            "The retained evidence does not identify the physical object or configuration that produced the blocked grid cells.",
+            "The snapshot does not prove the exact costmap state consumed by every planner invocation.",
+            "No connection in the retained grid does not prove that no physical route existed outside that grid or under another configuration.",
+        ),
+        failure_chain=(
+            f"The recorded result pose was in a free cell (cost {observation.start_cost}), but "
+            f"the requested goal was in a blocked cell (cost {observation.goal_cost}) and no "
+            f"connection below cost {observation.blocked_cost_threshold} existed in the retained "
+            f"grid. The planner logged '{observation.planner_error_text}' "
+            f"{observation.planner_failure_message_count} times, after which the action aborted."
+        ),
+        limits=(
+            "This establishes a bounded navigation-model restriction and its correspondence with "
+            "recorded planning failures. It does not establish a unique physical obstacle, exact "
+            "planner consumption of the retained snapshot, or global physical infeasibility."
+        ),
+        next_check=(
+            "Retain time-aligned planner inputs and test a prospectively declared corrected goal "
+            "from the same initial state and configuration."
         ),
     )
 

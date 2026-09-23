@@ -4,9 +4,11 @@ from crane_explain.diagnostics import (
     DiagnosticDisposition,
     GeometricRouteObservation,
     GoalTerminationObservation,
+    GridDisconnectionObservation,
     RecoveryExecutionObservation,
     RecoveryInvocationRecord,
     diagnose_geometric_route_restriction,
+    diagnose_retained_grid_disconnection,
     diagnose_recovery_execution_sequence,
     diagnose_terminal_stopping_margin,
     render_diagnostic,
@@ -195,6 +197,66 @@ def test_geometric_route_diagnosis_rejects_false_failure_premise_on_success():
         "difficulty occurred during execution."
     )
     assert rendered.count(repeated_limit) == 1
+
+
+def _grid_disconnection_observation(**overrides):
+    values = {
+        "episode_id": "roboboat-far-dock-global-costmap-1",
+        "evidence_ids": ("costmap-snapshot", "planner-log", "action-result"),
+        "frame": "odom",
+        "action_status": "aborted",
+        "start_x_m": -0.8579,
+        "start_y_m": -20.7833,
+        "goal_x_m": 0.8641,
+        "goal_y_m": -24.5869,
+        "start_cost": 0,
+        "goal_cost": 253,
+        "blocked_cost_threshold": 253,
+        "grid_connected_below_threshold": False,
+        "planner_failure_message_count": 23,
+        "planner_error_text": "Failed to create plan with tolerance of: 0.500000",
+        "action_wall_seconds": 128.3277,
+        "costmap_resolution_m": 0.2,
+        "costmap_snapshot_sha256": "c" * 64,
+        "costmap_snapshot_timestamp_s": 136.4097,
+        "source_anchor_ids": ("navfn-log",),
+    }
+    values.update(overrides)
+    return GridDisconnectionObservation(**values)
+
+
+def test_retained_grid_disconnection_links_grid_to_planner_failure_without_physical_overclaim():
+    result = diagnose_retained_grid_disconnection(_grid_disconnection_observation())
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    assert result.mechanism == "retained_navigation_model_disconnection"
+    assert "no 8-connected route below cost 253" in result.diagnosis
+    assert "23 matching planner-failure messages" in result.diagnosis
+    assert "unique physical obstacle" in result.limits
+    assert "global physical infeasibility" in result.limits
+    assert "Failed to create plan with tolerance" in result.failure_chain
+    rendered = render_diagnostic(result)
+    assert "goal_grid_cost=253 cost" in rendered
+    assert "retained_grid_connected_below_threshold=false boolean" in rendered
+    assert verify_diagnostic_text(result, rendered).accepted
+
+
+def test_retained_grid_disconnection_fails_closed_without_connectivity():
+    result = diagnose_retained_grid_disconnection(
+        _grid_disconnection_observation(grid_connected_below_threshold=None)
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert "retained-grid connectivity" in result.limits
+
+
+def test_retained_grid_disconnection_does_not_trigger_for_reachable_goal():
+    result = diagnose_retained_grid_disconnection(
+        _grid_disconnection_observation(goal_cost=0, grid_connected_below_threshold=True)
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert "different geometric, planning, control" in result.unresolved_alternatives[0]
 
 
 def _recovery_transitions():
