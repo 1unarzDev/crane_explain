@@ -259,7 +259,11 @@ def _unsupported_cause_checks(text: str) -> list[str]:
         # mechanism occurred.  Keep this narrow: the sentence must explicitly identify itself as
         # the next check and ask to measure/record/inspect/test evidence.
         prospective_check = (
-            "next check:" in sentence
+            (
+                "next check:" in sentence
+                or sentence.lstrip().startswith("next,")
+                or sentence.lstrip().startswith("next ")
+            )
             and _contains_any(sentence, ("record", "measure", "inspect", "test"))
         )
         for term in risky:

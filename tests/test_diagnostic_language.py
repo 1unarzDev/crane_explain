@@ -145,3 +145,14 @@ def test_bounded_verifier_does_not_license_cause_by_putting_it_in_next_check():
 
     assert not verification.accepted
     assert "unsupported physical-cause wording: motor" in verification.reasons
+
+
+def test_bounded_verifier_allows_next_measurement_without_treating_it_as_cause():
+    result = _command_motion_result()
+    candidate = render_diagnostic(result).replace(
+        "Next check: Record downstream accepted actuation or actuator feedback together with contact, clearance, and wheel-motion evidence over the discrepancy interval.",
+        "Next, record downstream accepted actuation or actuator feedback with contact evidence.",
+    )
+    verification = verify_bounded_diagnostic_text(result, candidate)
+
+    assert verification.accepted, verification.reasons
