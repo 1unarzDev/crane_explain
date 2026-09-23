@@ -134,6 +134,9 @@ def test_geometric_route_diagnosis_fails_to_insufficient_without_connectivity():
 
     assert result.disposition == DiagnosticDisposition.INSUFFICIENT
     assert "retained-grid connectivity" in result.limits
+    assert result.mechanism == "deadline_aligned_abort_with_unresolved_geometry"
+    assert "abort was aligned within 0.86 s" in result.diagnosis
+    assert "does not establish why navigation remained incomplete" in result.limits
 
 
 def test_geometric_route_diagnosis_does_not_trigger_without_lethal_route_cell():

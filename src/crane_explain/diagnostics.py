@@ -461,6 +461,30 @@ def diagnose_geometric_route_restriction(
             )
         )
 
+    deadline_delta = None
+    deadline_aligned = False
+    if (
+        observation.action_wall_seconds is not None
+        and observation.configured_deadline_seconds is not None
+    ):
+        deadline_delta = abs(
+            observation.action_wall_seconds - observation.configured_deadline_seconds
+        )
+        deadline_aligned = (
+            observation.action_status.lower() == "aborted"
+            and deadline_delta
+            <= max(2.0, observation.configured_deadline_seconds * 0.05)
+        )
+        measurements.append(
+            DiagnosticMeasurement(
+                id="absolute_deadline_timing_difference",
+                value=deadline_delta,
+                unit="s",
+                frame=None,
+                evidence_ids=observation.evidence_ids,
+            )
+        )
+
     common = dict(
         schema_version="crane-diagnostic-result-v1",
         diagnostic_id=f"{observation.episode_id}:geometric-route-restriction",
@@ -501,34 +525,62 @@ def diagnose_geometric_route_restriction(
     if observation.configured_deadline_seconds is None:
         missing.append("configured task deadline")
     if missing:
+        if deadline_aligned:
+            assert deadline_delta is not None
+            diagnosis = (
+                "The retained evidence cannot establish the physical/geometric reason navigation "
+                f"remained incomplete, but the action abort was aligned within {deadline_delta:.2f} s "
+                f"of the configured {observation.configured_deadline_seconds:.1f} s task deadline."
+            )
+            failure_chain = (
+                "Planning and delivered motion were recorded, but the missing costmap cells leave "
+                "the geometry-to-motion link unresolved. The action then aborted at "
+                f"{observation.action_wall_seconds:.2f} s, consistent with the source-qualified "
+                "task deadline; the terminal deadline tick was not directly observed."
+            )
+            mechanism = "deadline_aligned_abort_with_unresolved_geometry"
+        else:
+            diagnosis = (
+                "The geometric route restriction cannot be assessed from the retained evidence."
+            )
+            failure_chain = (
+                "A terminal action result is retained, but the geometry-to-motion chain is incomplete."
+            )
+            mechanism = "geometric_route_restriction"
         return DiagnosticResult(
-            **common,
+            **{**common, "mechanism": mechanism},
             disposition=DiagnosticDisposition.INSUFFICIENT,
-            diagnosis="The geometric route restriction cannot be assessed from the retained evidence.",
+            diagnosis=diagnosis,
             contradictory_evidence=(),
             unresolved_alternatives=(
                 "The direct route may have been clear or restricted in the relevant planner model.",
-                "The terminal action mechanism remains unresolved.",
+                (
+                    "The missing terminal BT transition prevents direct observation of the "
+                    "deadline decorator's final tick."
+                    if deadline_aligned and not observation.terminal_transition_observed
+                    else "The terminal action mechanism remains unresolved."
+                ),
             ),
-            failure_chain="A terminal action result is retained, but the geometry-to-motion chain is incomplete.",
-            limits=f"Missing decisive evidence: {', '.join(missing)}.",
-            next_check="Retain a hash-checked global costmap, synchronized trajectory, and exact task deadline.",
+            failure_chain=failure_chain,
+            limits=(
+                f"Missing decisive physical evidence: {', '.join(missing)}. "
+                "Deadline alignment reconstructs a bounded execution mechanism from source and "
+                "timing; it does not establish why navigation remained incomplete."
+                if deadline_aligned
+                else f"Missing decisive evidence: {', '.join(missing)}."
+            ),
+            next_check=(
+                "Retain a hash-checked global costmap synchronized with planned paths around the "
+                "first deviation to diagnose the unresolved physical mechanism."
+                if deadline_aligned
+                else "Retain a hash-checked global costmap, synchronized trajectory, and exact task deadline."
+            ),
         )
 
     assert observation.maximum_lateral_deviation_m is not None
     assert observation.action_wall_seconds is not None
     assert observation.configured_deadline_seconds is not None
-    deadline_delta = abs(observation.action_wall_seconds - observation.configured_deadline_seconds)
-    measurements.append(
-        DiagnosticMeasurement(
-            id="absolute_deadline_timing_difference",
-            value=deadline_delta,
-            unit="s",
-            frame=None,
-            evidence_ids=observation.evidence_ids,
-        )
-    )
-    common["measurements"] = tuple(measurements)
+    assert deadline_delta is not None
 
     supported = (
         observation.direct_route_has_lethal_cell is True
