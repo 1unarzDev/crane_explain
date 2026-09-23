@@ -51,6 +51,7 @@ def test_bounded_verifier_accepts_supported_paraphrase_after_citation_only_repai
 
     assert verification.accepted, verification.reasons
     assert verification.repair_applied
+    assert verification.policy == "bounded-diagnostic-language-v2"
     assert "Evidence IDs: fixture:abc, odom:return, task:limit." in verification.checked_text
 
 
@@ -155,6 +156,104 @@ def _command_motion_missing_odometry_result():
             source_qualified_recovery_count=2,
         )
     )
+
+
+def _compensated_command_motion_result():
+    from crane_explain.diagnostics import diagnose_command_motion_discrepancy
+
+    healthy_speed = 0.2597399950027466
+    windows = tuple(
+        [
+            CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, healthy_speed)
+            for index in range(5)
+        ]
+        + [
+            CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.0)
+            for index in range(8, 18)
+        ]
+        + [CommandMotionWindow(20, 20, 21, 10, 40, 0.8, healthy_speed)]
+    )
+    return diagnose_command_motion_discrepancy(
+        CommandMotionObservation(
+            episode_id="diagnostic-motion-dev-cm-compensated-001",
+            evidence_ids=("events:abc", "bt:def"),
+            command_frame="base_link-command-convention",
+            measured_frame="odom",
+            action_status="succeeded",
+            windows=windows,
+            raw_command_sample_count=485,
+            raw_odometry_sample_count=2232,
+            window_seconds=1.0,
+            minimum_command_samples_per_window=5,
+            minimum_odometry_samples_per_window=20,
+            calibration_window_count=5,
+            minimum_commanded_speed_mps=0.4,
+            minimum_healthy_measured_speed_mps=0.1,
+            maximum_discrepancy_response_ratio=0.2,
+            minimum_consecutive_discrepancy_windows=3,
+            follow_path_failure_count=1,
+            follow_path_attempt_count=2,
+            source_qualified_recovery_count=1,
+        )
+    )
+
+
+COMPENSATED_RAW_P_CANDIDATE = """## Diagnosis
+
+Yes. A sustained command-to-motion discrepancy temporarily prevented continued progress: Nav2 commanded 0.800 m/s while independently measured odometry recorded 0.000 m/s for 10.0 s.
+
+## Decisive evidence
+
+Healthy measured planar speed was 0.2597 m/s. During the discrepancy, the response ratio was 0.0. Afterward, measured speed recovered to 0.2597 m/s, a response ratio of 1.0. FollowPath recorded 1 failure, and the action ultimately succeeded.
+
+## Failure chain
+
+The response loss was followed by 1 source-qualified Wait recovery invocation. Before navigation succeeded, a later sufficiently sampled command-active window showed restored measured motion at the calibrated healthy level.
+
+## Limits and next check
+
+The evidence establishes the discrepancy and its execution sequence, but not a unique physical cause. Delivered commands do not prove actuator acceptance, and odometry does not prove Nav2 consumption. The unresolved causes include actuator rejection, mobility constraint, collision or obstruction, slip, or another execution-layer cause. Next, record downstream accepted actuation or actuator feedback with contact, clearance, and wheel-motion evidence during the discrepancy interval.
+"""
+
+
+def test_bounded_verifier_accepts_archived_compensated_raw_candidate():
+    verification = verify_bounded_diagnostic_text(
+        _compensated_command_motion_result(),
+        COMPENSATED_RAW_P_CANDIDATE,
+    )
+
+    assert verification.accepted, verification.reasons
+    assert verification.repair_applied
+
+
+def test_bounded_verifier_rejects_compensated_candidate_without_follow_path_failure():
+    candidate = COMPENSATED_RAW_P_CANDIDATE.replace(
+        "FollowPath recorded 1 failure",
+        "The controller recorded 1 failure",
+    )
+
+    verification = verify_bounded_diagnostic_text(
+        _compensated_command_motion_result(),
+        candidate,
+    )
+
+    assert not verification.accepted
+    assert "missing required proposition: controller failure sequence" in verification.reasons
+
+
+def test_bounded_verifier_rejects_claim_that_wait_caused_response_recovery():
+    candidate = COMPENSATED_RAW_P_CANDIDATE.replace(
+        "The response loss was followed by 1 source-qualified Wait recovery invocation. Before navigation succeeded, a later sufficiently sampled command-active window showed restored measured motion at the calibrated healthy level.",
+        "One source-qualified Wait recovery invocation caused the measured motion response to recover before navigation succeeded.",
+    )
+
+    verification = verify_bounded_diagnostic_text(
+        _compensated_command_motion_result(),
+        candidate,
+    )
+
+    assert not verification.accepted
+    assert "unsupported claim that recovery caused measured response" in verification.reasons
 
 
 def test_bounded_verifier_accepts_command_motion_checked_template():

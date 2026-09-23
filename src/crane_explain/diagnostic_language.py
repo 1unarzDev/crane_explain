@@ -37,7 +37,7 @@ class DiagnosticLanguageVerification:
     checked_text: str
     repair_applied: bool
     reasons: tuple[str, ...]
-    policy: str = "bounded-diagnostic-language-v1"
+    policy: str = "bounded-diagnostic-language-v2"
 
 
 def _parse_sections(text: str) -> tuple[dict[str, str], list[str]]:
@@ -231,8 +231,28 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
             require(all_text, ("command",), "delivered command evidence")
             require(all_text, ("odometry", "measured motion", "motion response"),
                     "independently measured motion evidence")
-            require(failure, ("followpath", "follow path"), "controller failure sequence")
+            require(all_text, ("followpath", "follow path"), "controller failure sequence")
             require(failure, ("wait",), "source-qualified recovery sequence")
+            for sentence in re.split(r"(?<=[.!?;])\s+", failure):
+                recovery_named = _contains_any(
+                    sentence,
+                    ("wait", "retry", "recovery invocation"),
+                )
+                measured_response_named = _contains_any(
+                    sentence,
+                    ("measured motion", "measured response", "odometry"),
+                )
+                causal_link = _contains_any(
+                    sentence,
+                    (
+                        "caused", "because", "due to", "therefore", "led to",
+                        "resulted in", "responsible for", "enabled",
+                    ),
+                )
+                if recovery_named and measured_response_named and causal_link:
+                    errors.append(
+                        "unsupported claim that recovery caused measured response"
+                    )
             if action_status == "succeeded":
                 require(failure, ("succeeded", "success"), "successful terminal action outcome")
                 if response_recovery_recorded:
