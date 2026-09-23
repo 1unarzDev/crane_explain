@@ -457,6 +457,13 @@ def diagnose_geometric_route_restriction(
 
     measurements: list[DiagnosticMeasurement] = [
         DiagnosticMeasurement(
+            id="action_status",
+            value=observation.action_status.lower(),
+            unit="status",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
             id="costmap_snapshot_sha256",
             value=observation.costmap_snapshot_sha256,
             unit="sha256",
@@ -579,6 +586,40 @@ def diagnose_geometric_route_restriction(
             "configured_deadline",
         ),
     )
+
+    if observation.action_status.lower() == "succeeded":
+        nominal_common = {
+            **common,
+            "mechanism": "no_failure_observed",
+            "causal_language_level": CausalLanguageLevel.RECORDED_SEQUENCE,
+            "decisive_measurement_ids": ("action_status",),
+        }
+        return DiagnosticResult(
+            **nominal_common,
+            disposition=DiagnosticDisposition.NOT_TRIGGERED,
+            diagnosis=(
+                "The action succeeded, so the question's failure premise is false. The retained "
+                "measurements do not establish the route-restriction-and-deadline failure "
+                "mechanism in this episode."
+            ),
+            contradictory_evidence=observation.evidence_ids,
+            unresolved_alternatives=(
+                "A successful result does not prove that no temporary route constraint or "
+                "control difficulty occurred during execution.",
+            ),
+            failure_chain=(
+                "No terminal failure chain is recorded: the navigation action returned success."
+            ),
+            limits=(
+                "This nominal outcome rejects the failure premise for this episode; it does not "
+                "establish that the route was universally obstacle-free or that every planner "
+                "state is represented by the retained snapshot."
+            ),
+            next_check=(
+                "Use this episode as a nominal comparator and inspect synchronized plans and "
+                "costmaps only if transient restrictions are the question of interest."
+            ),
+        )
 
     missing = []
     if observation.direct_route_has_lethal_cell is None:

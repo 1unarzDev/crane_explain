@@ -1,4 +1,5 @@
 from crane_explain.diagnostics import (
+    CausalLanguageLevel,
     DiagnosticDisposition,
     GeometricRouteObservation,
     GoalTerminationObservation,
@@ -160,3 +161,39 @@ def test_geometric_route_diagnosis_does_not_trigger_without_lethal_route_cell():
     )
 
     assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+
+
+def test_geometric_route_diagnosis_rejects_false_failure_premise_on_success():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="succeeded",
+            direct_route_has_lethal_cell=False,
+            direct_route_minimum_clearance_m=1.94,
+            maximum_lateral_deviation_m=0.0,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert result.mechanism == "no_failure_observed"
+    assert result.causal_language_level == CausalLanguageLevel.RECORDED_SEQUENCE
+    assert "failure premise is false" in result.diagnosis
+    assert "No terminal failure chain" in result.failure_chain
+    rendered = render_diagnostic(result)
+    assert "action_status=succeeded status" in rendered
+    assert "direct_route_minimum_clearance" not in rendered
+    assert "action aborted" not in rendered
+
+
+def test_geometric_route_success_rejects_false_premise_without_costmap_cells():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="succeeded",
+            direct_route_has_lethal_cell=None,
+            direct_route_minimum_clearance_m=None,
+            grid_connected=None,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert result.mechanism == "no_failure_observed"
+    assert "failure premise is false" in result.diagnosis
