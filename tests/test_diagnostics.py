@@ -177,10 +177,14 @@ def test_geometric_route_diagnosis_rejects_false_failure_premise_on_success():
     assert result.mechanism == "no_failure_observed"
     assert result.causal_language_level == CausalLanguageLevel.RECORDED_SEQUENCE
     assert "failure premise is false" in result.diagnosis
+    assert "fully covered direct-route audit" in result.diagnosis
+    assert "1.940 m minimum clearance" in result.diagnosis
+    assert result.contradictory_evidence == ()
     assert "No terminal failure chain" in result.failure_chain
     rendered = render_diagnostic(result)
     assert "action_status=succeeded status" in rendered
-    assert "direct_route_minimum_clearance" not in rendered
+    assert "direct_route_minimum_clearance=1.9400 m" in rendered
+    assert "maximum_lateral_deviation=0.0000 m" in rendered
     assert "action aborted" not in rendered
 
 
@@ -197,3 +201,21 @@ def test_geometric_route_success_rejects_false_premise_without_costmap_cells():
     assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
     assert result.mechanism == "no_failure_observed"
     assert "failure premise is false" in result.diagnosis
+    assert "route classification is unavailable" in result.limits
+    assert result.decisive_measurement_ids == ("action_status",)
+
+
+def test_geometric_route_success_reports_restriction_without_calling_it_a_failure():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(action_status="succeeded")
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert "failure premise is false" in result.diagnosis
+    assert "marked the requested direct route as restricted near x=8.80 m" in result.diagnosis
+    assert "did not prevent the recorded successful outcome" in result.diagnosis
+    assert "what physical object produced it" in result.limits
+    rendered = render_diagnostic(result)
+    assert "first_lethal_route_x=8.8000 m" in rendered
+    assert "maximum_lateral_deviation=2.7046 m" in rendered
+    assert "action aborted" not in rendered

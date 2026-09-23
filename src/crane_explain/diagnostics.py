@@ -66,9 +66,11 @@ class GeometricRouteObservation:
     """Robot-visible inputs for a bounded route-restriction diagnosis.
 
     ``direct_route_has_lethal_cell`` and ``grid_connected`` are outputs of an independently
-    versioned audit of the retained Nav2 costmap, not evaluator geometry.  Connectivity applies
-    only to the retained grid at its timestamp.  The trajectory is delivered odometry and does
-    not by itself prove why Nav2 selected a particular command.
+    versioned audit of the retained Nav2 costmap, not evaluator geometry.  ``False`` means the
+    complete sampled direct route was covered and no lethal cell was found; partial coverage must
+    be represented as ``None``.  Connectivity applies only to the retained grid at its timestamp.
+    The trajectory is delivered odometry and does not by itself prove why Nav2 selected a
+    particular command.
     """
 
     episode_id: str
@@ -588,11 +590,64 @@ def diagnose_geometric_route_restriction(
     )
 
     if observation.action_status.lower() == "succeeded":
+        nominal_measurement_ids = ["action_status"]
+        nominal_context = ""
+        nominal_limit = (
+            "The retained route classification is unavailable, so success alone does not "
+            "establish that the requested route was clear. "
+        )
+        if observation.direct_route_has_lethal_cell is False:
+            if observation.direct_route_minimum_clearance_m is not None:
+                nominal_measurement_ids.append("direct_route_minimum_clearance")
+            if observation.maximum_lateral_deviation_m is not None:
+                nominal_measurement_ids.append("maximum_lateral_deviation")
+            if observation.maximum_forward_progress_m is not None:
+                nominal_measurement_ids.append("maximum_forward_progress")
+            clearance = (
+                f" with {observation.direct_route_minimum_clearance_m:.3f} m minimum clearance "
+                "from a lethal cell"
+                if observation.direct_route_minimum_clearance_m is not None
+                else ""
+            )
+            deviation = (
+                f"; delivered odometry deviated at most "
+                f"{observation.maximum_lateral_deviation_m:.3f} m laterally"
+                if observation.maximum_lateral_deviation_m is not None
+                else ""
+            )
+            nominal_context = (
+                " The fully covered direct-route audit found no costmap cell at or above 253"
+                f"{clearance}{deviation}."
+            )
+            nominal_limit = (
+                "The retained snapshot supports only a bounded route observation at its recorded "
+                "time; it does not establish universal obstacle freedom or exact planner "
+                "consumption. "
+            )
+        elif observation.direct_route_has_lethal_cell is True:
+            if observation.direct_route_first_lethal_x_m is not None:
+                nominal_measurement_ids.append("first_lethal_route_x")
+            if observation.maximum_lateral_deviation_m is not None:
+                nominal_measurement_ids.append("maximum_lateral_deviation")
+            location = (
+                f" near x={observation.direct_route_first_lethal_x_m:.2f} m"
+                if observation.direct_route_first_lethal_x_m is not None
+                else ""
+            )
+            nominal_context = (
+                " The retained navigation model marked the requested direct route as restricted"
+                f"{location}, but that restriction did not prevent the recorded successful "
+                "outcome."
+            )
+            nominal_limit = (
+                "The retained snapshot does not prove when the restriction arose, what physical "
+                "object produced it, or whether Nav2 consumed that exact state. "
+            )
         nominal_common = {
             **common,
             "mechanism": "no_failure_observed",
             "causal_language_level": CausalLanguageLevel.RECORDED_SEQUENCE,
-            "decisive_measurement_ids": ("action_status",),
+            "decisive_measurement_ids": tuple(nominal_measurement_ids),
         }
         return DiagnosticResult(
             **nominal_common,
@@ -600,9 +655,9 @@ def diagnose_geometric_route_restriction(
             diagnosis=(
                 "The action succeeded, so the question's failure premise is false. The retained "
                 "measurements do not establish the route-restriction-and-deadline failure "
-                "mechanism in this episode."
+                f"mechanism in this episode.{nominal_context}"
             ),
-            contradictory_evidence=observation.evidence_ids,
+            contradictory_evidence=(),
             unresolved_alternatives=(
                 "A successful result does not prove that no temporary route constraint or "
                 "control difficulty occurred during execution.",
@@ -611,9 +666,10 @@ def diagnose_geometric_route_restriction(
                 "No terminal failure chain is recorded: the navigation action returned success."
             ),
             limits=(
-                "This nominal outcome rejects the failure premise for this episode; it does not "
-                "establish that the route was universally obstacle-free or that every planner "
-                "state is represented by the retained snapshot."
+                "This nominal outcome rejects the failure premise for this episode. "
+                f"{nominal_limit}"
+                "A successful result does not prove that no temporary route constraint or "
+                "control difficulty occurred during execution."
             ),
             next_check=(
                 "Use this episode as a nominal comparator and inspect synchronized plans and "
