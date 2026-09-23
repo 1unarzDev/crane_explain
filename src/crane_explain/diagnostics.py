@@ -1563,19 +1563,68 @@ def diagnose_command_motion_discrepancy(
     if observation.raw_odometry_sample_count == 0:
         missing.append("independently delivered odometry stream")
     if missing:
+        missing_text = " and ".join(missing)
+        measurements = (
+            DiagnosticMeasurement(
+                id="delivered_command_sample_count",
+                value=observation.raw_command_sample_count,
+                unit="samples",
+                frame=observation.command_frame,
+                evidence_ids=observation.evidence_ids,
+            ),
+            DiagnosticMeasurement(
+                id="independent_odometry_sample_count",
+                value=observation.raw_odometry_sample_count,
+                unit="samples",
+                frame=observation.measured_frame,
+                evidence_ids=observation.evidence_ids,
+            ),
+            DiagnosticMeasurement(
+                id="action_status",
+                value=observation.action_status.lower(),
+                unit="status",
+                frame=None,
+                evidence_ids=observation.evidence_ids,
+            ),
+            DiagnosticMeasurement(
+                id="follow_path_failures",
+                value=observation.follow_path_failure_count,
+                unit="count",
+                frame=None,
+                evidence_ids=observation.evidence_ids,
+            ),
+            DiagnosticMeasurement(
+                id="source_qualified_wait_recoveries",
+                value=observation.source_qualified_recovery_count,
+                unit="count",
+                frame=None,
+                evidence_ids=observation.evidence_ids,
+            ),
+        )
         return DiagnosticResult(
             **common,
             disposition=DiagnosticDisposition.INSUFFICIENT,
             diagnosis="The command-to-motion discrepancy cannot be assessed because "
-            + " and ".join(missing)
-            + " is missing.",
-            measurements=(),
+            + missing_text
+            + (" is missing." if len(missing) == 1 else " are missing."),
+            measurements=measurements,
             supporting_evidence=observation.evidence_ids,
             contradictory_evidence=(),
             unresolved_alternatives=(),
-            failure_chain="The retained streams do not support a time-aligned command-response chain.",
-            limits="Missing robot-visible motion-chain evidence prevents this diagnostic.",
+            failure_chain=(
+                f"The navigation action {observation.action_status.lower()} after "
+                f"{observation.follow_path_failure_count} recorded FollowPath failures and "
+                f"{observation.source_qualified_recovery_count} source-qualified Wait recovery "
+                f"invocations, but the missing {missing_text} prevents a time-aligned "
+                "command-response chain."
+            ),
+            limits=(
+                "Missing robot-visible motion-chain evidence prevents this diagnostic. The "
+                "execution sequence alone does not establish a command-to-motion discrepancy or "
+                "a unique physical cause."
+            ),
             next_check="Record synchronized delivered commands and independently measured planar odometry.",
+            decisive_measurement_ids=tuple(item.id for item in measurements),
         )
 
     eligible = [

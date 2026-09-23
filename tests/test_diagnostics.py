@@ -191,6 +191,11 @@ def test_command_motion_missing_command_stream_is_insufficient():
 
     assert result.disposition == DiagnosticDisposition.INSUFFICIENT
     assert "delivered Nav2 command stream" in result.diagnosis
+    rendered = render_diagnostic(result)
+    assert "delivered_command_sample_count=0 samples" in rendered
+    assert "independent_odometry_sample_count=360 samples" in rendered
+    assert "action_status=aborted status" in rendered
+    assert "Decisive evidence: ." not in rendered
 
 
 def test_command_motion_missing_odometry_stream_is_insufficient():
@@ -200,6 +205,16 @@ def test_command_motion_missing_odometry_stream_is_insufficient():
 
     assert result.disposition == DiagnosticDisposition.INSUFFICIENT
     assert "independently delivered odometry stream" in result.diagnosis
+    assert "2 recorded FollowPath failures" in result.failure_chain
+    assert "2 source-qualified Wait" in result.failure_chain
+    assert "execution sequence alone" in result.limits
+    rendered = render_diagnostic(result)
+    assert "delivered_command_sample_count=90 samples" in rendered
+    assert "independent_odometry_sample_count=0 samples" in rendered
+    assert "follow_path_failures=2 count" in rendered
+    assert "source_qualified_wait_recoveries=2 count" in rendered
+    assert "Decisive evidence: ." not in rendered
+    assert verify_diagnostic_text(result, rendered).accepted
 
 
 def _route_observation(**overrides):
