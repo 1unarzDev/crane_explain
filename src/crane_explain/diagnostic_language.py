@@ -197,6 +197,16 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
         require(failure, ("no terminal failure", "no failure chain"), "false failure premise")
         require(limits, ("does not prove", "not prove", "does not establish"),
                 "bounded success interpretation")
+    elif mechanism == "recorded_plan_change_with_unresolved_physical_trigger":
+        require(diagnosis, ("successful route change", "plan change"),
+                "delivered route change")
+        require(diagnosis, ("direct",), "initial direct plan")
+        require(all_text, ("unique hashes", "unique plan"), "distinct delivered plans")
+        require(failure, ("returned success", "action succeeded", "navigateToPose returned success"),
+                "successful action outcome")
+        require(limits, ("controller consumption", "controller consumed"),
+                "controller-consumption limit")
+        require(limits, ("causation", "caused"), "observation-to-plan causal limit")
     elif mechanism == "planner_failure_eligible_recovery_sequence":
         require(diagnosis, ("at least", "lower bound"), "lower-bound recovery count")
         require(all_text, ("source-qualified",), "source-qualified invocations")

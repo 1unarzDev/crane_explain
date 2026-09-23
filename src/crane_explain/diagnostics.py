@@ -96,6 +96,12 @@ class GeometricRouteObservation:
     costmap_snapshot_sha256: str
     costmap_snapshot_timestamp_s: float | None
     terminal_transition_observed: bool
+    delivered_plan_count: int | None = None
+    unique_delivered_plan_count: int | None = None
+    first_plan_maximum_lateral_deviation_m: float | None = None
+    all_plans_minimum_signed_lateral_deviation_m: float | None = None
+    all_plans_maximum_signed_lateral_deviation_m: float | None = None
+    all_plans_maximum_lateral_deviation_m: float | None = None
     computation_version: str = "geometric-route-restriction-v1"
     source_anchor_ids: tuple[str, ...] = ()
 
@@ -576,6 +582,12 @@ def diagnose_geometric_route_restriction(
         "configured_inflation_radius_m": observation.configured_inflation_radius_m,
         "costmap_resolution_m": observation.costmap_resolution_m,
         "costmap_snapshot_timestamp_s": observation.costmap_snapshot_timestamp_s,
+        "first_plan_maximum_lateral_deviation_m": (
+            observation.first_plan_maximum_lateral_deviation_m
+        ),
+        "all_plans_maximum_lateral_deviation_m": (
+            observation.all_plans_maximum_lateral_deviation_m
+        ),
     }
     for name, value in numeric.items():
         _require_nonnegative(name, value)
@@ -585,6 +597,23 @@ def diagnose_geometric_route_restriction(
         raise ValueError("costmap snapshot SHA-256 is required")
     if observation.successful_plan_count is not None and observation.successful_plan_count < 0:
         raise ValueError("successful_plan_count must be nonnegative")
+    for name, value in (
+        ("delivered_plan_count", observation.delivered_plan_count),
+        ("unique_delivered_plan_count", observation.unique_delivered_plan_count),
+    ):
+        if value is not None and value < 0:
+            raise ValueError(f"{name} must be nonnegative")
+    if (
+        observation.delivered_plan_count is not None
+        and observation.unique_delivered_plan_count is not None
+        and observation.unique_delivered_plan_count > observation.delivered_plan_count
+    ):
+        raise ValueError("unique_delivered_plan_count cannot exceed delivered_plan_count")
+    if observation.computation_version not in {
+        "geometric-route-restriction-v1",
+        "geometric-route-restriction-v2",
+    }:
+        raise ValueError(f"unsupported geometric computation version: {observation.computation_version}")
 
     measurements: list[DiagnosticMeasurement] = [
         DiagnosticMeasurement(
@@ -631,6 +660,28 @@ def diagnose_geometric_route_restriction(
         ("goal_distance", observation.goal_distance_m, "m"),
         ("action_wall_time", observation.action_wall_seconds, "s"),
         ("configured_deadline", observation.configured_deadline_seconds, "s"),
+        ("delivered_plan_count", observation.delivered_plan_count, "count"),
+        ("unique_delivered_plan_count", observation.unique_delivered_plan_count, "count"),
+        (
+            "first_plan_maximum_lateral_deviation",
+            observation.first_plan_maximum_lateral_deviation_m,
+            "m",
+        ),
+        (
+            "all_plans_minimum_signed_lateral_deviation",
+            observation.all_plans_minimum_signed_lateral_deviation_m,
+            "m",
+        ),
+        (
+            "all_plans_maximum_signed_lateral_deviation",
+            observation.all_plans_maximum_signed_lateral_deviation_m,
+            "m",
+        ),
+        (
+            "all_plans_maximum_lateral_deviation",
+            observation.all_plans_maximum_lateral_deviation_m,
+            "m",
+        ),
     )
     for measurement_id, value, unit in optional_measurements:
         if value is not None:
@@ -719,6 +770,84 @@ def diagnose_geometric_route_restriction(
     )
 
     if observation.action_status.lower() == "succeeded":
+        plan_values = (
+            observation.delivered_plan_count,
+            observation.unique_delivered_plan_count,
+            observation.first_plan_maximum_lateral_deviation_m,
+            observation.all_plans_minimum_signed_lateral_deviation_m,
+            observation.all_plans_maximum_signed_lateral_deviation_m,
+            observation.all_plans_maximum_lateral_deviation_m,
+        )
+        if (
+            observation.computation_version == "geometric-route-restriction-v2"
+            and all(value is not None for value in plan_values)
+            and observation.delivered_plan_count > 1
+            and observation.unique_delivered_plan_count > 1
+            and observation.first_plan_maximum_lateral_deviation_m <= 0.05
+            and observation.all_plans_maximum_lateral_deviation_m > 0.5
+        ):
+            route_context = (
+                " A separate retained navigation-model snapshot marked the requested direct "
+                + (
+                    f"route as restricted near x={observation.direct_route_first_lethal_x_m:.2f} m."
+                    if observation.direct_route_first_lethal_x_m is not None
+                    else "route as restricted."
+                )
+                if observation.direct_route_has_lethal_cell is True
+                else (
+                    " The retained rolling costmap does not cover enough of the requested route "
+                    "to classify its physical trigger."
+                    if observation.direct_route_has_lethal_cell is None
+                    else " The retained direct-route audit did not find a lethal sampled cell."
+                )
+            )
+            return DiagnosticResult(
+                **{
+                    **common,
+                    "mechanism": "recorded_plan_change_with_unresolved_physical_trigger",
+                    "causal_language_level": CausalLanguageLevel.RECORDED_SEQUENCE,
+                    "decisive_measurement_ids": (
+                        "action_status",
+                        "delivered_plan_count",
+                        "unique_delivered_plan_count",
+                        "first_plan_maximum_lateral_deviation",
+                        "all_plans_minimum_signed_lateral_deviation",
+                        "all_plans_maximum_signed_lateral_deviation",
+                        "maximum_lateral_deviation",
+                    ),
+                },
+                disposition=DiagnosticDisposition.SUPPORTED,
+                diagnosis=(
+                    "The retained navigation record shows a successful route change: the first "
+                    f"delivered plan was direct ({observation.first_plan_maximum_lateral_deviation_m:.3f} m "
+                    "maximum lateral deviation), while later delivered plans spanned "
+                    f"{observation.all_plans_minimum_signed_lateral_deviation_m:.3f} m to "
+                    f"{observation.all_plans_maximum_signed_lateral_deviation_m:.3f} m about the "
+                    f"requested line.{route_context} The action succeeded."
+                ),
+                contradictory_evidence=(),
+                unresolved_alternatives=(
+                    "The record does not establish that the controller consumed each delivered plan.",
+                    "The record does not establish which observation or physical condition caused the plan changes.",
+                ),
+                failure_chain=(
+                    f"The fixture received {observation.delivered_plan_count} plans "
+                    f"({observation.unique_delivered_plan_count} unique hashes); their geometry "
+                    "changed from direct to non-direct, delivered odometry also departed from the "
+                    "requested line, and NavigateToPose returned success. No terminal failure "
+                    "chain is recorded."
+                ),
+                limits=(
+                    "This supports delivered plan changes, measured route deviation, and success. "
+                    "It does not prove controller consumption, observation-to-plan causation, "
+                    "or the identity of a physical obstacle."
+                ),
+                next_check=(
+                    "Time-align successive plan poses with retained costmap observations or add "
+                    "planner introspection before attributing a specific plan change to a specific "
+                    "restriction."
+                ),
+            )
         nominal_measurement_ids = ["action_status"]
         nominal_context = ""
         nominal_limit = (

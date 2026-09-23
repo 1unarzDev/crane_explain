@@ -581,3 +581,98 @@ def test_geometric_route_success_reports_restriction_without_calling_it_a_failur
     assert "first_lethal_route_x=8.8000 m" in rendered
     assert "maximum_lateral_deviation=2.7046 m" in rendered
     assert "action aborted" not in rendered
+
+
+def test_geometric_route_v2_reports_delivered_plan_change_before_success():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="succeeded",
+            computation_version="geometric-route-restriction-v2",
+            delivered_plan_count=70,
+            unique_delivered_plan_count=70,
+            first_plan_maximum_lateral_deviation_m=0.0,
+            all_plans_minimum_signed_lateral_deviation_m=-1.175,
+            all_plans_maximum_signed_lateral_deviation_m=1.035,
+            all_plans_maximum_lateral_deviation_m=1.175,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    assert result.mechanism == "recorded_plan_change_with_unresolved_physical_trigger"
+    assert result.causal_language_level == CausalLanguageLevel.RECORDED_SEQUENCE
+    assert "successful route change" in result.diagnosis
+    assert "-1.175 m to 1.035 m" in result.diagnosis
+    assert "No terminal failure chain" in result.failure_chain
+    rendered = render_diagnostic(result)
+    assert "delivered_plan_count=70 count" in rendered
+    assert "unique_delivered_plan_count=70 count" in rendered
+    assert "controller consumption" in rendered
+    assert verify_diagnostic_text(result, rendered).accepted
+
+
+def test_geometric_route_v2_reports_plan_change_when_rolling_grid_is_partial():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="succeeded",
+            direct_route_has_lethal_cell=None,
+            direct_route_minimum_clearance_m=None,
+            computation_version="geometric-route-restriction-v2",
+            delivered_plan_count=70,
+            unique_delivered_plan_count=70,
+            first_plan_maximum_lateral_deviation_m=0.0,
+            all_plans_minimum_signed_lateral_deviation_m=-1.175,
+            all_plans_maximum_signed_lateral_deviation_m=1.035,
+            all_plans_maximum_lateral_deviation_m=1.175,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    assert result.mechanism == "recorded_plan_change_with_unresolved_physical_trigger"
+    assert "does not cover enough" in result.diagnosis
+    assert "which observation or physical condition" in result.unresolved_alternatives[1]
+
+
+def test_geometric_route_v2_falls_back_to_no_failure_without_plan_geometry():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="succeeded",
+            computation_version="geometric-route-restriction-v2",
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert result.mechanism == "no_failure_observed"
+
+
+def test_geometric_route_v2_does_not_call_nondirect_first_plan_direct():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="succeeded",
+            computation_version="geometric-route-restriction-v2",
+            delivered_plan_count=2,
+            unique_delivered_plan_count=2,
+            first_plan_maximum_lateral_deviation_m=0.75,
+            all_plans_minimum_signed_lateral_deviation_m=-0.75,
+            all_plans_maximum_signed_lateral_deviation_m=1.0,
+            all_plans_maximum_lateral_deviation_m=1.0,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
+    assert result.mechanism == "no_failure_observed"
+
+
+def test_geometric_route_v2_rejects_impossible_unique_plan_count():
+    with pytest.raises(ValueError, match="cannot exceed"):
+        diagnose_geometric_route_restriction(
+            _route_observation(
+                action_status="succeeded",
+                computation_version="geometric-route-restriction-v2",
+                delivered_plan_count=2,
+                unique_delivered_plan_count=3,
+                first_plan_maximum_lateral_deviation_m=0.0,
+                all_plans_minimum_signed_lateral_deviation_m=-1.0,
+                all_plans_maximum_signed_lateral_deviation_m=1.0,
+                all_plans_maximum_lateral_deviation_m=1.0,
+            )
+        )
