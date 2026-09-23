@@ -1,9 +1,13 @@
 from crane_explain.diagnostics import (
+    BehaviorTreeTransition,
     CausalLanguageLevel,
     DiagnosticDisposition,
     GeometricRouteObservation,
     GoalTerminationObservation,
+    RecoveryExecutionObservation,
+    RecoveryInvocationRecord,
     diagnose_geometric_route_restriction,
+    diagnose_recovery_execution_sequence,
     diagnose_terminal_stopping_margin,
     render_diagnostic,
     verify_diagnostic_text,
@@ -191,6 +195,127 @@ def test_geometric_route_diagnosis_rejects_false_failure_premise_on_success():
         "difficulty occurred during execution."
     )
     assert rendered.count(repeated_limit) == 1
+
+
+def _recovery_transitions():
+    return (
+        BehaviorTreeTransition("t1", "ComputePathToPose", "RUNNING", "FAILURE", "g1"),
+        BehaviorTreeTransition("t2", "NavigateWithReplanning", "RUNNING", "FAILURE", "g1"),
+        BehaviorTreeTransition("t3", "WouldAPlannerRecoveryHelp", "IDLE", "SUCCESS", "g1"),
+        BehaviorTreeTransition("t4", "RecoveryFallback", "IDLE", "RUNNING", "g1"),
+        BehaviorTreeTransition("t5", "Spin", "IDLE", "RUNNING", "g1"),
+        BehaviorTreeTransition("t6", "Spin", "RUNNING", "SUCCESS", "g1"),
+        BehaviorTreeTransition("t7", "ComputePathToPose", "RUNNING", "FAILURE", "g1"),
+        BehaviorTreeTransition("t8", "NavigateWithReplanning", "RUNNING", "FAILURE", "g1"),
+        BehaviorTreeTransition("t9", "WouldAPlannerRecoveryHelp", "IDLE", "SUCCESS", "g1"),
+        BehaviorTreeTransition("t10", "RecoveryFallback", "IDLE", "RUNNING", "g1"),
+        BehaviorTreeTransition("t11", "Wait", "IDLE", "RUNNING", "g1"),
+        BehaviorTreeTransition("t12", "Wait", "RUNNING", "SUCCESS", "g1"),
+    )
+
+
+def _recovery_invocation(invocation_id, node_name, start_id, end_id):
+    return RecoveryInvocationRecord(
+        invocation_id=invocation_id,
+        node_name=node_name,
+        goal_id="g1",
+        start_transition_id=start_id,
+        end_transition_id=end_id,
+        complete=True,
+        terminal_status="SUCCESS",
+        classifier_basis="configured_exact_node_name_allowlist",
+        classifier_rule="configured_leaf_idle_to_running",
+        policy_sha256="a" * 64,
+        observed_start_transition_id=start_id,
+    )
+
+
+def _recovery_observation(**overrides):
+    values = {
+        "episode_id": "eco-pilot-001",
+        "evidence_ids": ("ecological-evidence", "bt-policy"),
+        "action_status": "succeeded",
+        "goal_id": "g1",
+        "transitions": _recovery_transitions(),
+        "recovery_invocations": (
+            _recovery_invocation("r1", "Spin", "t5", "t6"),
+            _recovery_invocation("r2", "Wait", "t11", "t12"),
+        ),
+        "recovery_policy_sha256": "a" * 64,
+        "whole_history_complete": False,
+        "maximum_feedback_recovery_count": 16,
+        "physical_cause_established": False,
+        "source_anchor_ids": ("nav2-recovery-tree",),
+    }
+    values.update(overrides)
+    return RecoveryExecutionObservation(**values)
+
+
+def test_recovery_sequence_reports_lower_bound_and_eventual_success():
+    result = diagnose_recovery_execution_sequence(_recovery_observation())
+
+    assert result.disposition == DiagnosticDisposition.SUPPORTED
+    assert result.mechanism == "planner_failure_eligible_recovery_sequence"
+    assert "at least 2 source-qualified recovery invocations" in result.diagnosis
+    assert "Spin->SUCCESS, Wait->SUCCESS" in result.diagnosis
+    assert "eventually succeeded" in result.failure_chain
+    assert "lower bound" in result.limits
+    assert "physical cause" in result.limits
+
+
+def test_feedback_recovery_count_is_not_treated_as_invocation_count():
+    result = diagnose_recovery_execution_sequence(_recovery_observation())
+    rendered = render_diagnostic(result)
+
+    assert "at least 2 source-qualified recovery invocations" in rendered
+    assert "at least 16" not in rendered
+    assert "maximum_nav2_feedback_recovery_count" not in rendered
+    assert "not treated as the number of unique BT invocations" in rendered
+
+
+def test_complete_recovery_history_allows_exact_count():
+    result = diagnose_recovery_execution_sequence(
+        _recovery_observation(whole_history_complete=True)
+    )
+
+    assert "exactly 2 source-qualified recovery invocations" in result.diagnosis
+    assert "Whole-history completeness is proven" in result.limits
+
+
+def test_missing_recovery_eligibility_context_is_insufficient():
+    transitions = tuple(
+        transition
+        for transition in _recovery_transitions()
+        if transition.record_id != "t9"
+    )
+    result = diagnose_recovery_execution_sequence(
+        _recovery_observation(transitions=transitions)
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert result.mechanism == "recovery_execution_sequence_with_missing_context"
+    assert "Only 1 of 2" in result.diagnosis
+    assert any(
+        reason.startswith("r2 lacks the ordered planner-failure")
+        for reason in result.contradictory_evidence
+    )
+
+
+def test_duplicate_recovery_invocation_ids_are_rejected():
+    duplicate = _recovery_invocation("r1", "Wait", "t11", "t12")
+    try:
+        diagnose_recovery_execution_sequence(
+            _recovery_observation(
+                recovery_invocations=(
+                    _recovery_invocation("r1", "Spin", "t5", "t6"),
+                    duplicate,
+                )
+            )
+        )
+    except ValueError as error:
+        assert "invocation IDs must be unique" in str(error)
+    else:
+        raise AssertionError("duplicate recovery invocation IDs were accepted")
 
 
 def test_geometric_route_success_rejects_false_premise_without_costmap_cells():

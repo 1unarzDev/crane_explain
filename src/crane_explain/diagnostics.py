@@ -28,7 +28,7 @@ class CausalLanguageLevel(str, Enum):
 @dataclass(frozen=True)
 class DiagnosticMeasurement:
     id: str
-    value: float | str
+    value: float | int | str
     unit: str
     frame: str | None
     evidence_ids: tuple[str, ...]
@@ -97,6 +97,57 @@ class GeometricRouteObservation:
     terminal_transition_observed: bool
     computation_version: str = "geometric-route-restriction-v1"
     source_anchor_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BehaviorTreeTransition:
+    """One retained, goal-scoped BehaviorTreeLog status transition."""
+
+    record_id: str
+    node_name: str
+    previous_status: str
+    current_status: str
+    goal_id: str
+
+
+@dataclass(frozen=True)
+class RecoveryInvocationRecord:
+    """A capture-side recovery invocation with its bounded classifier provenance."""
+
+    invocation_id: str
+    node_name: str
+    goal_id: str
+    start_transition_id: str
+    end_transition_id: str | None
+    complete: bool
+    terminal_status: str | None
+    classifier_basis: str
+    classifier_rule: str
+    policy_sha256: str
+    observed_start_transition_id: str
+
+
+@dataclass(frozen=True)
+class RecoveryExecutionObservation:
+    """Robot-visible inputs for a bounded Nav2 recovery-mechanism diagnosis.
+
+    The transition sequence supports reconstruction of the software execution mechanism. It does
+    not establish the physical condition that made planning fail, and the Nav2 feedback recovery
+    count is deliberately retained only as a non-identity observation.
+    """
+
+    episode_id: str
+    evidence_ids: tuple[str, ...]
+    action_status: str
+    goal_id: str
+    transitions: tuple[BehaviorTreeTransition, ...]
+    recovery_invocations: tuple[RecoveryInvocationRecord, ...]
+    recovery_policy_sha256: str
+    whole_history_complete: bool
+    maximum_feedback_recovery_count: int | None
+    physical_cause_established: bool
+    source_anchor_ids: tuple[str, ...] = ()
+    computation_version: str = "recovery-execution-sequence-v1"
 
 
 @dataclass(frozen=True)
@@ -812,6 +863,330 @@ def diagnose_geometric_route_restriction(
         next_check=(
             "Retain time-aligned global-costmap snapshots and full planned paths around the first deviation "
             "to distinguish a feasible but too-long detour from changing map state."
+        ),
+    )
+
+
+def diagnose_recovery_execution_sequence(
+    observation: RecoveryExecutionObservation,
+) -> DiagnosticResult:
+    """Reconstruct a source-qualified recovery sequence without inventing physical causation.
+
+    Each accepted invocation must be a unique, complete capture-side invocation whose start and
+    end transitions match the configured recovery-leaf classifier.  It must also be preceded,
+    since the prior retained invocation ended, by the ordered sequence ``ComputePathToPose``
+    failure, navigation-pipeline failure, successful planner-recovery eligibility check, and
+    system-recovery entry.  Missing context yields an insufficient result rather than silently
+    treating any recovery-named transition as an invocation.
+    """
+
+    if not observation.evidence_ids:
+        raise ValueError("at least one robot-visible evidence ID is required")
+    if not observation.goal_id:
+        raise ValueError("goal_id is required")
+    if not observation.recovery_policy_sha256:
+        raise ValueError("recovery_policy_sha256 is required")
+    if (
+        observation.maximum_feedback_recovery_count is not None
+        and observation.maximum_feedback_recovery_count < 0
+    ):
+        raise ValueError("maximum_feedback_recovery_count must be nonnegative")
+
+    transition_ids = [transition.record_id for transition in observation.transitions]
+    if len(transition_ids) != len(set(transition_ids)):
+        raise ValueError("transition record IDs must be unique")
+    invocation_ids = [item.invocation_id for item in observation.recovery_invocations]
+    if len(invocation_ids) != len(set(invocation_ids)):
+        raise ValueError("recovery invocation IDs must be unique")
+
+    transitions_by_id = {
+        transition.record_id: transition for transition in observation.transitions
+    }
+    transition_index = {
+        transition.record_id: index
+        for index, transition in enumerate(observation.transitions)
+    }
+    ordered_invocations = sorted(
+        observation.recovery_invocations,
+        key=lambda item: transition_index.get(item.start_transition_id, math.inf),
+    )
+
+    qualified: list[RecoveryInvocationRecord] = []
+    context_ids: list[str] = []
+    rejected_reasons: list[str] = []
+    lower_bound = 0
+
+    def nearest_before(
+        start_index: int,
+        lower_index: int,
+        node_name: str,
+        current_status: str,
+    ) -> int | None:
+        for index in range(start_index - 1, lower_index - 1, -1):
+            transition = observation.transitions[index]
+            if (
+                transition.goal_id == observation.goal_id
+                and transition.node_name == node_name
+                and transition.current_status.upper() == current_status
+            ):
+                return index
+        return None
+
+    for invocation in ordered_invocations:
+        start = transitions_by_id.get(invocation.start_transition_id)
+        end = (
+            transitions_by_id.get(invocation.end_transition_id)
+            if invocation.end_transition_id is not None
+            else None
+        )
+        source_qualified = (
+            invocation.goal_id == observation.goal_id
+            and invocation.policy_sha256 == observation.recovery_policy_sha256
+            and invocation.classifier_basis
+            == "configured_exact_node_name_allowlist"
+            and invocation.classifier_rule == "configured_leaf_idle_to_running"
+            and invocation.observed_start_transition_id
+            == invocation.start_transition_id
+            and start is not None
+            and start.goal_id == observation.goal_id
+            and start.node_name == invocation.node_name
+            and start.previous_status.upper() == "IDLE"
+            and start.current_status.upper() == "RUNNING"
+        )
+        complete = (
+            invocation.complete
+            and invocation.terminal_status is not None
+            and end is not None
+            and end.goal_id == observation.goal_id
+            and end.node_name == invocation.node_name
+            and end.previous_status.upper() == "RUNNING"
+            and end.current_status.upper() == invocation.terminal_status.upper()
+            and transition_index[end.record_id] > transition_index[start.record_id]
+            if start is not None
+            else False
+        )
+        if not source_qualified:
+            rejected_reasons.append(
+                f"{invocation.invocation_id} lacks matching bounded classifier provenance"
+            )
+            continue
+        if not complete:
+            rejected_reasons.append(
+                f"{invocation.invocation_id} lacks a matching complete terminal transition"
+            )
+            continue
+
+        assert start is not None
+        start_index = transition_index[start.record_id]
+        system_index = nearest_before(
+            start_index, lower_bound, "RecoveryFallback", "RUNNING"
+        )
+        pipeline_index = (
+            nearest_before(
+                system_index, lower_bound, "NavigateWithReplanning", "FAILURE"
+            )
+            if system_index is not None
+            else None
+        )
+        planner_index = (
+            nearest_before(
+                pipeline_index, lower_bound, "ComputePathToPose", "FAILURE"
+            )
+            if pipeline_index is not None
+            else None
+        )
+        eligibility_index = None
+        if pipeline_index is not None and system_index is not None:
+            eligibility_index = next(
+                (
+                    index
+                    for index in range(pipeline_index + 1, system_index)
+                    if observation.transitions[index].goal_id == observation.goal_id
+                    and observation.transitions[index].node_name
+                    == "WouldAPlannerRecoveryHelp"
+                    and observation.transitions[index].current_status.upper() == "SUCCESS"
+                ),
+                None,
+            )
+        if None in (planner_index, pipeline_index, eligibility_index, system_index):
+            rejected_reasons.append(
+                f"{invocation.invocation_id} lacks the ordered planner-failure and "
+                "recovery-eligibility context"
+            )
+            lower_bound = transition_index[end.record_id] + 1
+            continue
+
+        assert planner_index is not None
+        assert pipeline_index is not None
+        assert eligibility_index is not None
+        assert system_index is not None
+        qualified.append(invocation)
+        context_ids.extend(
+            observation.transitions[index].record_id
+            for index in (
+                planner_index,
+                pipeline_index,
+                eligibility_index,
+                system_index,
+                start_index,
+                transition_index[end.record_id],
+            )
+        )
+        lower_bound = transition_index[end.record_id] + 1
+
+    count = len(qualified)
+    sequence = ", ".join(
+        f"{item.node_name}->{item.terminal_status}" for item in qualified
+    )
+    count_measurement_id = (
+        "source_qualified_recovery_invocation_count"
+        if observation.whole_history_complete
+        else "minimum_source_qualified_recovery_invocation_count"
+    )
+    measurements: list[DiagnosticMeasurement] = [
+        DiagnosticMeasurement(
+            id="action_status",
+            value=observation.action_status.lower(),
+            unit="status",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id=count_measurement_id,
+            value=count,
+            unit="invocations",
+            frame=None,
+            evidence_ids=tuple(dict.fromkeys((*observation.evidence_ids, *context_ids))),
+        ),
+        DiagnosticMeasurement(
+            id="qualified_recovery_sequence",
+            value=sequence or "none",
+            unit="ordered_nodes_and_terminal_statuses",
+            frame=None,
+            evidence_ids=tuple(dict.fromkeys((*observation.evidence_ids, *context_ids))),
+        ),
+        DiagnosticMeasurement(
+            id="bt_history_completeness",
+            value="complete" if observation.whole_history_complete else "not_proven",
+            unit="status",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+    ]
+    if observation.maximum_feedback_recovery_count is not None:
+        measurements.append(
+            DiagnosticMeasurement(
+                id="maximum_nav2_feedback_recovery_count",
+                value=observation.maximum_feedback_recovery_count,
+                unit="feedback_count_not_invocation_identity",
+                frame=None,
+                evidence_ids=observation.evidence_ids,
+            )
+        )
+
+    common = dict(
+        schema_version="crane-diagnostic-result-v1",
+        diagnostic_id=f"{observation.episode_id}:recovery-execution-sequence",
+        episode_id=observation.episode_id,
+        measurements=tuple(measurements),
+        computation=(
+            "validate unique invocation IDs; match policy hash and exact-node classifier; "
+            "match IDLE-to-RUNNING start and RUNNING-to-terminal transitions; reconstruct "
+            "ordered ComputePathToPose failure, NavigateWithReplanning failure, "
+            "WouldAPlannerRecoveryHelp success, and RecoveryFallback entry"
+        ),
+        computation_version=observation.computation_version,
+        assumptions=(
+            "The retained BT transitions are ordered as observed for one accepted goal.",
+            "The hash-pinned exact-name policy classifies recovery leaves, not every feedback increment.",
+            "Software execution ordering does not identify the physical cause of planning failure.",
+        ),
+        supporting_evidence=tuple(
+            dict.fromkeys((*observation.evidence_ids, *context_ids))
+        ),
+        contradictory_evidence=tuple(rejected_reasons),
+        unresolved_alternatives=(
+            "The physical condition that caused each planner failure is unresolved.",
+            "Costmap delivery would not by itself prove the exact state consumed by the planner.",
+        ),
+        causal_language_level=CausalLanguageLevel.EXECUTION_MECHANISM,
+        source_anchor_ids=observation.source_anchor_ids,
+        decisive_measurement_ids=(
+            count_measurement_id,
+            "qualified_recovery_sequence",
+            "action_status",
+            "bt_history_completeness",
+        ),
+    )
+
+    if not observation.recovery_invocations:
+        return DiagnosticResult(
+            **common,
+            mechanism="recovery_execution_sequence",
+            disposition=DiagnosticDisposition.NOT_TRIGGERED,
+            diagnosis="No retained source-qualified recovery invocation was available to diagnose.",
+            failure_chain="The required recovery execution sequence was not observed.",
+            limits="This absence is not an exact zero unless whole-history completeness is proven.",
+            next_check="Inspect the goal-scoped BT capture and its completeness record.",
+        )
+
+    if count != len(observation.recovery_invocations):
+        return DiagnosticResult(
+            **common,
+            mechanism="recovery_execution_sequence_with_missing_context",
+            disposition=DiagnosticDisposition.INSUFFICIENT,
+            diagnosis=(
+                f"Only {count} of {len(observation.recovery_invocations)} retained recovery "
+                "records could be linked to complete source-qualified planner-failure and "
+                "recovery-eligibility sequences."
+            ),
+            failure_chain=(
+                "At least one retained recovery record lacked the transition context required "
+                "to reconstruct why the behavior tree entered that recovery leaf."
+            ),
+            limits=(
+                "The incomplete linkage prevents a complete recovery-mechanism account. "
+                "The Nav2 feedback recovery count is not a recovery-invocation identity."
+            ),
+            next_check=(
+                "Retain the goal-scoped planner failure, eligibility check, system-recovery entry, "
+                "and leaf terminal transition around every invocation."
+            ),
+        )
+
+    quantifier = "exactly" if observation.whole_history_complete else "at least"
+    history_limit = (
+        "Whole-history completeness is proven for the accepted goal."
+        if observation.whole_history_complete
+        else "Whole-history completeness is not proven, so the retained count is a lower bound."
+    )
+    physical_limit = (
+        "This diagnostic does not independently validate the separately asserted physical cause."
+        if observation.physical_cause_established
+        else "The robot-visible evidence does not establish the physical cause of the planner failures."
+    )
+    return DiagnosticResult(
+        **common,
+        mechanism="planner_failure_eligible_recovery_sequence",
+        disposition=DiagnosticDisposition.SUPPORTED,
+        diagnosis=(
+            f"The retained behavior-tree evidence establishes {quantifier} {count} "
+            f"source-qualified recovery invocations ({sequence}). Each followed a planner "
+            "branch failure and a successful recovery-eligibility check."
+        ),
+        failure_chain=(
+            f"For each of the {count} retained invocations, ComputePathToPose failed, the "
+            "NavigateWithReplanning pipeline failed, WouldAPlannerRecoveryHelp succeeded, and "
+            f"the tree entered a recovery leaf. The navigation action eventually "
+            f"{observation.action_status.lower()}."
+        ),
+        limits=(
+            f"{history_limit} {physical_limit} The maximum Nav2 feedback recovery count is "
+            "retained only as feedback and is not treated as the number of unique BT invocations."
+        ),
+        next_check=(
+            "Time-align retained plans and hash-checked costmap observations around the first "
+            "planner failure to test a physical route-restriction mechanism."
         ),
     )
 

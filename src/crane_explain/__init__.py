@@ -1,6 +1,10 @@
 """Evidence-checked robot explanation core."""
 
-from .diagnostics import DiagnosticResult, GoalTerminationObservation
+from .diagnostics import (
+    DiagnosticResult,
+    GoalTerminationObservation,
+    RecoveryExecutionObservation,
+)
 from .models import AnswerPlan, EpisodeRecord
 
 __all__ = [
@@ -8,4 +12,5 @@ __all__ = [
     "DiagnosticResult",
     "EpisodeRecord",
     "GoalTerminationObservation",
+    "RecoveryExecutionObservation",
 ]
