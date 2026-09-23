@@ -213,6 +213,32 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
                 "planner failure correspondence")
         require(failure, ("abort",), "terminal action outcome")
         require(limits, ("physical",), "physical-cause limitation")
+    elif mechanism == "command_to_motion_discrepancy":
+        if disposition == DiagnosticDisposition.SUPPORTED:
+            require(diagnosis, ("command-to-motion", "command and odometry"),
+                    "command-to-motion discrepancy")
+            require(all_text, ("command",), "delivered command evidence")
+            require(all_text, ("odometry", "measured motion", "motion response"),
+                    "independently measured motion evidence")
+            require(failure, ("followpath", "follow path"), "controller failure sequence")
+            require(failure, ("wait",), "source-qualified recovery sequence")
+            require(failure, ("abort",), "terminal action outcome")
+            require(limits, ("actuator acceptance", "accepted by the actuator"),
+                    "actuator-acceptance limit")
+            require(limits, ("unique physical cause", "does not distinguish", "unresolved"),
+                    "unresolved unique cause")
+        elif disposition == DiagnosticDisposition.NOT_TRIGGERED:
+            require(diagnosis, ("succeeded", "success", "not triggered", "did not contain"),
+                    "non-triggered or successful outcome")
+            require(failure, ("no supported", "no observed", "no failure"),
+                    "absent command-motion failure chain")
+            require(limits, ("only", "does not prove", "not prove"),
+                    "bounded negative interpretation")
+        else:
+            require(diagnosis, ("cannot", "insufficient", "missing"),
+                    "insufficient diagnostic status")
+            require(limits, ("missing", "prevents", "cannot"),
+                    "missing command-motion evidence")
     else:
         errors.append(f"unsupported diagnostic mechanism: {mechanism}")
     return errors
@@ -229,8 +255,15 @@ def _unsupported_cause_checks(text: str) -> list[str]:
         "no evidence", "not established", "not uniquely", "does not uniquely",
     )
     for sentence in re.split(r"(?<=[.!?;])\s+", _normalized(text)):
+        # A bounded next-check request may name a signal to record without asserting that signal's
+        # mechanism occurred.  Keep this narrow: the sentence must explicitly identify itself as
+        # the next check and ask to measure/record/inspect/test evidence.
+        prospective_check = (
+            "next check:" in sentence
+            and _contains_any(sentence, ("record", "measure", "inspect", "test"))
+        )
         for term in risky:
-            if term in sentence and not _contains_any(sentence, safe):
+            if term in sentence and not prospective_check and not _contains_any(sentence, safe):
                 errors.append(f"unsupported physical-cause wording: {term}")
     return errors
 
