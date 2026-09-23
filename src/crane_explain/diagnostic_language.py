@@ -267,7 +267,8 @@ def _unsupported_cause_checks(text: str) -> list[str]:
             and _contains_any(sentence, ("record", "measure", "inspect", "test"))
         )
         for term in risky:
-            if term in sentence and not prospective_check and not _contains_any(sentence, safe):
+            term_present = re.search(r"\b" + re.escape(term) + r"\b", sentence) is not None
+            if term_present and not prospective_check and not _contains_any(sentence, safe):
                 errors.append(f"unsupported physical-cause wording: {term}")
     return errors
 

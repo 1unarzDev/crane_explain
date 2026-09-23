@@ -156,3 +156,14 @@ def test_bounded_verifier_allows_next_measurement_without_treating_it_as_cause()
     verification = verify_bounded_diagnostic_text(result, candidate)
 
     assert verification.accepted, verification.reasons
+
+
+def test_bounded_verifier_does_not_match_wind_inside_fixed_window():
+    result = _command_motion_result(action_status="succeeded", measured_after=0.26)
+    candidate = render_diagnostic(result).replace(
+        "declared thresholds",
+        "declared fixed-window thresholds",
+    )
+    verification = verify_bounded_diagnostic_text(result, candidate)
+
+    assert verification.accepted, verification.reasons
