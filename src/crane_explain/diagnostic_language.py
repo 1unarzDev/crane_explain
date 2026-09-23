@@ -37,7 +37,7 @@ class DiagnosticLanguageVerification:
     checked_text: str
     repair_applied: bool
     reasons: tuple[str, ...]
-    policy: str = "bounded-diagnostic-language-v2"
+    policy: str = "bounded-diagnostic-language-v3"
 
 
 def _parse_sections(text: str) -> tuple[dict[str, str], list[str]]:
@@ -198,7 +198,7 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
         require(limits, ("does not prove", "not prove", "does not establish"),
                 "bounded success interpretation")
     elif mechanism == "recorded_plan_change_with_unresolved_physical_trigger":
-        require(diagnosis, ("successful route change", "plan change"),
+        require(diagnosis, ("successful route change", "route change", "plan change"),
                 "delivered route change")
         require(diagnosis, ("direct",), "initial direct plan")
         require(all_text, ("unique hashes", "unique plan"), "distinct delivered plans")

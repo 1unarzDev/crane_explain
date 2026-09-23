@@ -2,7 +2,9 @@ from crane_explain.diagnostic_language import verify_bounded_diagnostic_text
 from crane_explain.diagnostics import (
     CommandMotionObservation,
     CommandMotionWindow,
+    GeometricRouteObservation,
     GoalTerminationObservation,
+    diagnose_geometric_route_restriction,
     diagnose_terminal_stopping_margin,
     render_diagnostic,
 )
@@ -51,7 +53,7 @@ def test_bounded_verifier_accepts_supported_paraphrase_after_citation_only_repai
 
     assert verification.accepted, verification.reasons
     assert verification.repair_applied
-    assert verification.policy == "bounded-diagnostic-language-v2"
+    assert verification.policy == "bounded-diagnostic-language-v3"
     assert "Evidence IDs: fixture:abc, odom:return, task:limit." in verification.checked_text
 
 
@@ -330,3 +332,78 @@ Execution evidence alone does not establish a command-to-motion discrepancy or a
 
     assert verification.accepted, verification.reasons
     assert verification.repair_applied
+
+
+PLAN_CHANGE_RAW_P_CANDIDATE = """## Diagnosis
+
+The robot-visible record supports a route change from an initially direct plan to later non-direct plans, with signed lateral deviations from -1.175 m to 1.035 m about the requested line. The navigation action succeeded.
+
+## Decisive evidence
+
+Seventy delivered plans were recorded, all with unique hashes. The first had 0.000 m maximum lateral deviation; across all plans, maximum deviation was 1.175 m. Delivered odometry also departed from the requested line. No contradictory evidence was recorded.
+
+## Failure chain
+
+The recorded sequence was: plan geometry changed from direct to non-direct, odometry departed from the requested line, and NavigateToPose returned success. No terminal failure chain is recorded.
+
+## Limits and next check
+
+The retained rolling costmap does not cover enough of the requested route to identify the physical trigger. The record does not prove controller consumption, observation-to-plan causation, or the identity of an obstacle. Time-align successive plan poses with costmap observations, or add planner introspection, before attributing a specific plan change to a specific restriction.
+"""
+
+
+def _plan_change_result():
+    return diagnose_geometric_route_restriction(
+        GeometricRouteObservation(
+            episode_id="diagnostic-land-dev-004",
+            evidence_ids=("fixture:abc", "costmap:def"),
+            frame="odom",
+            action_status="succeeded",
+            direct_route_has_lethal_cell=None,
+            direct_route_minimum_clearance_m=None,
+            direct_route_first_lethal_x_m=None,
+            direct_route_first_lethal_y_m=None,
+            grid_connected=None,
+            connectivity_origin="action-result-pose",
+            maximum_lateral_deviation_m=1.1041951179504395,
+            maximum_forward_progress_m=17.566610709203967,
+            goal_distance_m=18.0,
+            successful_plan_count=70,
+            action_wall_seconds=73.110042581975,
+            configured_deadline_seconds=100.0,
+            configured_robot_radius_m=0.22,
+            configured_inflation_radius_m=0.55,
+            costmap_resolution_m=0.1,
+            costmap_snapshot_sha256="0" * 64,
+            costmap_snapshot_timestamp_s=73.0,
+            terminal_transition_observed=False,
+            delivered_plan_count=70,
+            unique_delivered_plan_count=70,
+            first_plan_maximum_lateral_deviation_m=0.0,
+            all_plans_minimum_signed_lateral_deviation_m=-1.1749038696289054,
+            all_plans_maximum_signed_lateral_deviation_m=1.0350578308105458,
+            all_plans_maximum_lateral_deviation_m=1.1749038696289054,
+            computation_version="geometric-route-restriction-v2",
+            source_anchor_ids=("nav2-config", "bt-xml"),
+        )
+    )
+
+
+def test_bounded_verifier_accepts_archived_plan_change_raw_candidate():
+    verification = verify_bounded_diagnostic_text(
+        _plan_change_result(), PLAN_CHANGE_RAW_P_CANDIDATE
+    )
+
+    assert verification.accepted, verification.reasons
+    assert verification.repair_applied
+
+
+def test_bounded_verifier_still_rejects_plan_change_without_controller_limit():
+    candidate = PLAN_CHANGE_RAW_P_CANDIDATE.replace(
+        "The record does not prove controller consumption, observation-to-plan causation, or the identity of an obstacle.",
+        "The record does not prove observation-to-plan causation or the identity of an obstacle.",
+    )
+    verification = verify_bounded_diagnostic_text(_plan_change_result(), candidate)
+
+    assert not verification.accepted
+    assert "missing required proposition: controller-consumption limit" in verification.reasons
