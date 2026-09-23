@@ -237,8 +237,10 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
         else:
             require(diagnosis, ("cannot", "insufficient", "missing"),
                     "insufficient diagnostic status")
-            require(limits, ("missing", "prevents", "cannot"),
+            require(all_text, ("missing", "prevents", "cannot", "without time-aligned"),
                     "missing command-motion evidence")
+            require(limits, ("does not establish", "cannot establish", "unresolved", "insufficient"),
+                    "bounded insufficient-evidence interpretation")
     else:
         errors.append(f"unsupported diagnostic mechanism: {mechanism}")
     return errors

@@ -121,6 +121,34 @@ def _command_motion_result(*, action_status="aborted", measured_after=0.0):
     )
 
 
+def _command_motion_missing_odometry_result():
+    from crane_explain.diagnostics import diagnose_command_motion_discrepancy
+
+    return diagnose_command_motion_discrepancy(
+        CommandMotionObservation(
+            episode_id="land-command-motion-missing-odometry",
+            evidence_ids=("events:abc", "bt:def"),
+            command_frame="base_link-command-convention",
+            measured_frame="odom",
+            action_status="aborted",
+            windows=(),
+            raw_command_sample_count=376,
+            raw_odometry_sample_count=0,
+            window_seconds=1.0,
+            minimum_command_samples_per_window=5,
+            minimum_odometry_samples_per_window=20,
+            calibration_window_count=5,
+            minimum_commanded_speed_mps=0.4,
+            minimum_healthy_measured_speed_mps=0.1,
+            maximum_discrepancy_response_ratio=0.2,
+            minimum_consecutive_discrepancy_windows=3,
+            follow_path_failure_count=2,
+            follow_path_attempt_count=3,
+            source_qualified_recovery_count=2,
+        )
+    )
+
+
 def test_bounded_verifier_accepts_command_motion_checked_template():
     result = _command_motion_result()
     verification = verify_bounded_diagnostic_text(result, render_diagnostic(result))
@@ -167,3 +195,24 @@ def test_bounded_verifier_does_not_match_wind_inside_fixed_window():
     verification = verify_bounded_diagnostic_text(result, candidate)
 
     assert verification.accepted, verification.reasons
+
+
+def test_bounded_verifier_accepts_missing_odometry_paraphrase_after_citation_repair():
+    result = _command_motion_missing_odometry_result()
+    candidate = """## Diagnosis
+Insufficient evidence: a command-to-motion discrepancy cannot be assessed because the independently delivered odometry stream is missing. The premise is therefore not established.
+
+## Decisive evidence
+There were 376 delivered command samples but 0 independent odometry samples. The action ended aborted, with 2 FollowPath failures and 2 source-qualified Wait recoveries.
+
+## Failure chain
+The navigation action aborted after the recorded FollowPath failures and Wait recoveries. Without time-aligned, independently measured motion, this sequence cannot establish that commanded motion failed to produce robot motion or that such a discrepancy prevented continuation.
+
+## Limits and next check
+Execution evidence alone does not establish a command-to-motion discrepancy or a unique physical cause. Record synchronized delivered commands and independently measured planar odometry.
+"""
+
+    verification = verify_bounded_diagnostic_text(result, candidate)
+
+    assert verification.accepted, verification.reasons
+    assert verification.repair_applied
