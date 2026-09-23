@@ -1,3 +1,5 @@
+import pytest
+
 from crane_explain.diagnostics import (
     BehaviorTreeTransition,
     CausalLanguageLevel,
@@ -187,6 +189,34 @@ def test_command_motion_diagnosis_reports_measured_response_recovery_before_succ
     rendered = render_diagnostic(result)
     assert "recovered_measured_planar_speed=0.2600 m/s" in rendered
     assert verify_diagnostic_text(result, rendered).accepted
+
+
+def test_command_motion_v1_preserves_historical_result_without_recovery_extension():
+    windows = list(_command_motion_observation().windows)
+    windows.extend(
+        CommandMotionWindow(index, index, index + 1, 10, 40, 0.8, 0.26)
+        for index in range(9, 12)
+    )
+    observation = _command_motion_observation(
+        windows=tuple(windows),
+        action_status="succeeded",
+        computation_version="command-motion-discrepancy-v1",
+    )
+    result = diagnose_command_motion_discrepancy(observation)
+
+    assert result.computation_version == "command-motion-discrepancy-v1"
+    assert "after the earliest discrepancy" not in result.computation
+    assert "recovered_measured_planar_speed" not in {
+        item.id for item in result.measurements
+    }
+    assert "measured response recovered" not in result.diagnosis
+
+
+def test_command_motion_rejects_unknown_computation_version():
+    with pytest.raises(ValueError, match="unsupported command-motion computation version"):
+        diagnose_command_motion_discrepancy(
+            _command_motion_observation(computation_version="command-motion-discrepancy-v999")
+        )
 
 
 def test_command_motion_nominal_response_does_not_trigger():

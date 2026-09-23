@@ -1496,6 +1496,11 @@ def diagnose_command_motion_discrepancy(
 
     if not observation.evidence_ids:
         raise ValueError("at least one robot-visible evidence ID is required")
+    if observation.computation_version not in {
+        "command-motion-discrepancy-v1",
+        "command-motion-discrepancy-v2",
+    }:
+        raise ValueError("unsupported command-motion computation version")
     positive = {
         "window_seconds": observation.window_seconds,
         "minimum_command_samples_per_window": observation.minimum_command_samples_per_window,
@@ -1544,10 +1549,14 @@ def diagnose_command_motion_discrepancy(
         computation=(
             "fixed wall-time windows; healthy_response = median(initial sufficiently sampled "
             "command-active window medians); response_ratio = later measured planar speed / "
-            "healthy_response; require bounded consecutive low-response windows; after the "
-            "earliest discrepancy, report the first sufficiently sampled command-active window "
-            "whose measured speed is again above both the low-response boundary and the minimum "
-            "healthy measured speed"
+            "healthy_response; require bounded consecutive low-response windows"
+            + (
+                "; after the earliest discrepancy, report the first sufficiently sampled "
+                "command-active window whose measured speed is again above both the low-response "
+                "boundary and the minimum healthy measured speed"
+                if observation.computation_version == "command-motion-discrepancy-v2"
+                else ""
+            )
         ),
         computation_version=observation.computation_version,
         assumptions=(
@@ -1807,17 +1816,21 @@ def diagnose_command_motion_discrepancy(
     )
     response_ratio = discrepancy_motion / healthy_speed
     duration = run[-1].end_offset_s - run[0].start_offset_s
-    recovery_window = next(
-        (
-            window
-            for window in eligible
-            if window.index > run[-1].index
-            and float(window.median_measured_planar_speed_mps)
-            >= observation.minimum_healthy_measured_speed_mps
-            and float(window.median_measured_planar_speed_mps) / healthy_speed
-            > ratio_threshold
-        ),
-        None,
+    recovery_window = (
+        next(
+            (
+                window
+                for window in eligible
+                if window.index > run[-1].index
+                and float(window.median_measured_planar_speed_mps)
+                >= observation.minimum_healthy_measured_speed_mps
+                and float(window.median_measured_planar_speed_mps) / healthy_speed
+                > ratio_threshold
+            ),
+            None,
+        )
+        if observation.computation_version == "command-motion-discrepancy-v2"
+        else None
     )
     measurements = baseline_measurements + (
         DiagnosticMeasurement(
