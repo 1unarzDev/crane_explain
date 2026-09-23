@@ -1673,12 +1673,42 @@ def diagnose_command_motion_discrepancy(
             evidence_ids=observation.evidence_ids,
             interval_s=(calibration[0].start_offset_s, calibration[-1].end_offset_s),
         ),
+        DiagnosticMeasurement(
+            id="action_status",
+            value=observation.action_status.lower(),
+            unit="status",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="follow_path_failures",
+            value=observation.follow_path_failure_count,
+            unit="count",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
+        DiagnosticMeasurement(
+            id="source_qualified_wait_recoveries",
+            value=observation.source_qualified_recovery_count,
+            unit="count",
+            frame=None,
+            evidence_ids=observation.evidence_ids,
+        ),
     )
     if not qualifying_runs:
+        succeeded = observation.action_status.lower() == "succeeded"
         return DiagnosticResult(
             **common,
             disposition=DiagnosticDisposition.NOT_TRIGGERED,
             diagnosis=(
+                (
+                    "The navigation action succeeded, so the premise that a command-to-motion "
+                    "failure prevented continuation is false. "
+                )
+                if succeeded
+                else ""
+            )
+            + (
                 "The retained streams did not contain the required consecutive low-response "
                 "windows after healthy-response calibration."
             ),
@@ -1686,12 +1716,31 @@ def diagnose_command_motion_discrepancy(
             supporting_evidence=observation.evidence_ids,
             contradictory_evidence=("required-sustained-low-response-sequence-not-observed",),
             unresolved_alternatives=(),
-            failure_chain="No supported command-to-motion discrepancy failure chain was observed.",
-            limits="This negative check applies only to the retained synchronized interval and declared thresholds.",
-            next_check="Inspect other physical or execution mechanisms if navigation still failed.",
+            failure_chain=(
+                "The recorded action succeeded with no observed FollowPath failure or "
+                "source-qualified Wait recovery invocation."
+                if succeeded
+                else "No supported command-to-motion discrepancy failure chain was observed."
+            ),
+            limits=(
+                "This negative check applies only to the retained synchronized interval and "
+                "declared thresholds. Success does not prove that every transient execution "
+                "difficulty was absent."
+                if succeeded
+                else "This negative check applies only to the retained synchronized interval and declared thresholds."
+            ),
+            next_check=(
+                "Retain the same synchronized streams if a later run fails; no failure diagnosis "
+                "is warranted for this successful action."
+                if succeeded
+                else "Inspect other physical or execution mechanisms if navigation still failed."
+            ),
             decisive_measurement_ids=(
+                "action_status",
                 "calibrated_healthy_commanded_planar_speed",
                 "calibrated_healthy_planar_speed",
+                "follow_path_failures",
+                "source_qualified_wait_recoveries",
             ),
         )
 
@@ -1738,20 +1787,6 @@ def diagnose_command_motion_discrepancy(
             frame=None,
             evidence_ids=observation.evidence_ids,
             interval_s=(run[0].start_offset_s, run[-1].end_offset_s),
-        ),
-        DiagnosticMeasurement(
-            id="follow_path_failures",
-            value=observation.follow_path_failure_count,
-            unit="count",
-            frame=None,
-            evidence_ids=observation.evidence_ids,
-        ),
-        DiagnosticMeasurement(
-            id="source_qualified_wait_recoveries",
-            value=observation.source_qualified_recovery_count,
-            unit="count",
-            frame=None,
-            evidence_ids=observation.evidence_ids,
         ),
     )
     attempt_clause = (

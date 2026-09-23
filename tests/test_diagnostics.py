@@ -166,11 +166,22 @@ def test_command_motion_nominal_response_does_not_trigger():
         for index in range(9)
     )
     result = diagnose_command_motion_discrepancy(
-        _command_motion_observation(windows=nominal)
+        _command_motion_observation(
+            windows=nominal,
+            action_status="succeeded",
+            follow_path_failure_count=0,
+            follow_path_attempt_count=1,
+            source_qualified_recovery_count=0,
+        )
     )
 
     assert result.disposition == DiagnosticDisposition.NOT_TRIGGERED
-    assert "required consecutive low-response windows" in result.diagnosis
+    assert "premise" in result.diagnosis
+    assert "action succeeded" in result.diagnosis
+    assert "no observed FollowPath failure" in result.failure_chain
+    rendered = render_diagnostic(result)
+    assert "action_status=succeeded status" in rendered
+    assert "source_qualified_wait_recoveries=0 count" in rendered
 
 
 def test_command_motion_missing_command_stream_is_insufficient():
