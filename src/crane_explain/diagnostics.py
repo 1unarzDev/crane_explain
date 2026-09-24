@@ -2042,7 +2042,7 @@ def diagnose_command_motion_discrepancy(
         diagnosis=(
             "The retained command and odometry streams establish a sustained command-to-motion "
             f"discrepancy: Nav2 continued publishing a median {discrepancy_command:.3f} m/s "
-            "planar command while independently delivered odometry recorded a median "
+            "planar command while delivered odometry recorded a median "
             f"{discrepancy_motion:.3f} m/s planar motion response for {duration:.1f} s."
             + recovery_clause
         ),

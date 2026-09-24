@@ -37,7 +37,7 @@ class DiagnosticLanguageVerification:
     checked_text: str
     repair_applied: bool
     reasons: tuple[str, ...]
-    policy: str = "bounded-diagnostic-language-v3"
+    policy: str = "bounded-diagnostic-language-v4"
 
 
 def _parse_sections(text: str) -> tuple[dict[str, str], list[str]]:
@@ -293,7 +293,9 @@ def _mechanism_checks(result: DiagnosticResult, sections: dict[str, str]) -> lis
     return errors
 
 
-def _unsupported_cause_checks(text: str) -> list[str]:
+def _unsupported_cause_checks(
+    text: str, *, limits_and_next_check: str = ""
+) -> list[str]:
     errors = []
     risky = (
         "wave", "current", "wind", "motor", "collision", "hydrodynamic", "inertia",
@@ -303,6 +305,13 @@ def _unsupported_cause_checks(text: str) -> list[str]:
         "not ", "does not", "did not", "cannot", "unresolved", "remain unresolved",
         "no evidence", "not established", "not uniquely", "does not uniquely",
     )
+    normalized_limits = _normalized(limits_and_next_check)
+    limits_sentences = {
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?;])\s+", normalized_limits)
+        if sentence.strip()
+    }
+    causal_assertions = (" caused ", " causes ", " because ", " due to ", " resulted in ")
     for sentence in re.split(r"(?<=[.!?;])\s+", _normalized(text)):
         # A bounded next-check request may name a signal to record without asserting that signal's
         # mechanism occurred.  Keep this narrow: the sentence must explicitly identify itself as
@@ -314,6 +323,14 @@ def _unsupported_cause_checks(text: str) -> list[str]:
                 or sentence.lstrip().startswith("next ")
             )
             and _contains_any(sentence, ("record", "measure", "inspect", "test"))
+        )
+        # The section heading already declares this content as a next check.  Accept a bare
+        # imperative there only when it requests evidence and contains no causal connective.
+        # This keeps "Record motor failure caused ..." fail closed.
+        prospective_check = prospective_check or (
+            sentence.strip() in limits_sentences
+            and sentence.lstrip().startswith(("record ", "measure ", "inspect ", "test "))
+            and not _contains_any(sentence, causal_assertions)
         )
         for term in risky:
             term_present = re.search(r"\b" + re.escape(term) + r"\b", sentence) is not None
@@ -353,7 +370,12 @@ def verify_bounded_diagnostic_text(
             errors.append(f"unlicensed numeric claim: {token}")
 
     errors.extend(_mechanism_checks(result, sections))
-    errors.extend(_unsupported_cause_checks(checked_text))
+    errors.extend(
+        _unsupported_cause_checks(
+            checked_text,
+            limits_and_next_check=sections["Limits and next check"],
+        )
+    )
     if evidence_ids and not all(item in checked_text for item in evidence_ids):
         errors.append("complete evidence-ID set is absent after bounded repair")
     return DiagnosticLanguageVerification(

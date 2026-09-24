@@ -53,7 +53,7 @@ def test_bounded_verifier_accepts_supported_paraphrase_after_citation_only_repai
 
     assert verification.accepted, verification.reasons
     assert verification.repair_applied
-    assert verification.policy == "bounded-diagnostic-language-v3"
+    assert verification.policy == "bounded-diagnostic-language-v4"
     assert "Evidence IDs: fixture:abc, odom:return, task:limit." in verification.checked_text
 
 
@@ -300,6 +300,38 @@ def test_bounded_verifier_allows_next_measurement_without_treating_it_as_cause()
     verification = verify_bounded_diagnostic_text(result, candidate)
 
     assert verification.accepted, verification.reasons
+
+
+def test_bounded_verifier_allows_bare_imperative_in_declared_next_check_section():
+    result = _command_motion_result()
+    candidate = render_diagnostic(result).replace(
+        "Next check: Record downstream accepted actuation or actuator feedback together with contact, clearance, and wheel-motion evidence over the discrepancy interval.",
+        "Record downstream accepted actuation or actuator feedback together with contact, clearance, and wheel-motion evidence over the discrepancy interval.",
+    )
+
+    verification = verify_bounded_diagnostic_text(result, candidate)
+
+    assert verification.accepted, verification.reasons
+
+
+def test_bounded_verifier_rejects_causal_claim_in_bare_imperative_next_check():
+    result = _command_motion_result()
+    candidate = render_diagnostic(result).replace(
+        "Next check: Record downstream accepted actuation or actuator feedback together with contact, clearance, and wheel-motion evidence over the discrepancy interval.",
+        "Record that motor failure caused the discrepancy.",
+    )
+
+    verification = verify_bounded_diagnostic_text(result, candidate)
+
+    assert not verification.accepted
+    assert "unsupported physical-cause wording: motor" in verification.reasons
+
+
+def test_command_motion_template_does_not_assert_independent_delivery_relationship():
+    rendered = render_diagnostic(_command_motion_result())
+
+    assert "while delivered odometry recorded" in rendered
+    assert "independently delivered odometry" not in rendered
 
 
 def test_bounded_verifier_does_not_match_wind_inside_fixed_window():
