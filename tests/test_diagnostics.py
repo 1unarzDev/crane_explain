@@ -331,6 +331,31 @@ def test_geometric_route_diagnosis_fails_to_insufficient_without_connectivity():
     assert "does not establish why navigation remained incomplete" in result.limits
 
 
+def test_geometric_route_insufficient_nonterminal_window_does_not_invent_result():
+    result = diagnose_geometric_route_restriction(
+        _route_observation(
+            action_status="remained active at the observation cutoff",
+            direct_route_has_lethal_cell=None,
+            direct_route_minimum_clearance_m=None,
+            grid_connected=False,
+            maximum_lateral_deviation_m=0.06,
+            action_wall_seconds=100.0,
+            configured_deadline_seconds=100.0,
+        )
+    )
+
+    assert result.disposition == DiagnosticDisposition.INSUFFICIENT
+    assert "No terminal action result is retained" in result.failure_chain
+    assert "remained active" in result.failure_chain
+    assert any(
+        "eventual action outcome after the observation cutoff" in alternative
+        for alternative in result.unresolved_alternatives
+    )
+    rendered = render_diagnostic(result)
+    assert "A terminal action result is retained" not in rendered
+    assert verify_diagnostic_text(result, rendered).accepted
+
+
 def test_geometric_route_diagnosis_does_not_trigger_without_lethal_route_cell():
     result = diagnose_geometric_route_restriction(
         _route_observation(direct_route_has_lethal_cell=False)

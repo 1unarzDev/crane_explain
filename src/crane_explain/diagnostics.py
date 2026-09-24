@@ -719,6 +719,11 @@ def diagnose_geometric_route_restriction(
 
     deadline_delta = None
     deadline_aligned = False
+    action_status_lower = observation.action_status.lower()
+    nonterminal_observation = action_status_lower in {
+        "timeout",
+        "remained active at the observation cutoff",
+    }
     if (
         observation.action_wall_seconds is not None
         and observation.configured_deadline_seconds is not None
@@ -966,7 +971,10 @@ def diagnose_geometric_route_restriction(
                 "The geometric route restriction cannot be assessed from the retained evidence."
             )
             failure_chain = (
-                "A terminal action result is retained, but the geometry-to-motion chain is incomplete."
+                "No terminal action result is retained; the observation window ended while the "
+                "action remained active, and the geometry-to-motion chain is incomplete."
+                if nonterminal_observation
+                else "A terminal action result is retained, but the geometry-to-motion chain is incomplete."
             )
             mechanism = "geometric_route_restriction"
         return DiagnosticResult(
@@ -980,7 +988,11 @@ def diagnose_geometric_route_restriction(
                     "The missing terminal BT transition prevents direct observation of the "
                     "deadline decorator's final tick."
                     if deadline_aligned and not observation.terminal_transition_observed
-                    else "The terminal action mechanism remains unresolved."
+                    else (
+                        "The eventual action outcome after the observation cutoff remains unresolved."
+                        if nonterminal_observation
+                        else "The terminal action mechanism remains unresolved."
+                    )
                 ),
             ),
             failure_chain=failure_chain,
