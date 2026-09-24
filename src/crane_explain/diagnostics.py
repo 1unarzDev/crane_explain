@@ -231,7 +231,7 @@ class CommandMotionObservation:
     follow_path_attempt_count: int
     source_qualified_recovery_count: int
     source_anchor_ids: tuple[str, ...] = ()
-    computation_version: str = "command-motion-discrepancy-v2"
+    computation_version: str = "command-motion-discrepancy-v3"
 
 
 @dataclass(frozen=True)
@@ -1628,6 +1628,7 @@ def diagnose_command_motion_discrepancy(
     if observation.computation_version not in {
         "command-motion-discrepancy-v1",
         "command-motion-discrepancy-v2",
+        "command-motion-discrepancy-v3",
     }:
         raise ValueError("unsupported command-motion computation version")
     positive = {
@@ -1683,7 +1684,8 @@ def diagnose_command_motion_discrepancy(
                 "; after the earliest discrepancy, report the first sufficiently sampled "
                 "command-active window whose measured speed is again above both the low-response "
                 "boundary and the minimum healthy measured speed"
-                if observation.computation_version == "command-motion-discrepancy-v2"
+                if observation.computation_version
+                in {"command-motion-discrepancy-v2", "command-motion-discrepancy-v3"}
                 else ""
             )
         ),
@@ -1958,7 +1960,8 @@ def diagnose_command_motion_discrepancy(
             ),
             None,
         )
-        if observation.computation_version == "command-motion-discrepancy-v2"
+        if observation.computation_version
+        in {"command-motion-discrepancy-v2", "command-motion-discrepancy-v3"}
         else None
     )
     measurements = baseline_measurements + (
@@ -2036,14 +2039,19 @@ def diagnose_command_motion_discrepancy(
         if observation.follow_path_attempt_count >= 3
         else f"The navigation action {observation.action_status.lower()}."
     )
+    odometry_delivery_clause = (
+        "planar command while delivered odometry recorded a median "
+        if observation.computation_version == "command-motion-discrepancy-v3"
+        else "planar command while independently delivered odometry recorded a median "
+    )
     return DiagnosticResult(
         **common,
         disposition=DiagnosticDisposition.SUPPORTED,
         diagnosis=(
             "The retained command and odometry streams establish a sustained command-to-motion "
             f"discrepancy: Nav2 continued publishing a median {discrepancy_command:.3f} m/s "
-            "planar command while delivered odometry recorded a median "
-            f"{discrepancy_motion:.3f} m/s planar motion response for {duration:.1f} s."
+            + odometry_delivery_clause
+            + f"{discrepancy_motion:.3f} m/s planar motion response for {duration:.1f} s."
             + recovery_clause
         ),
         measurements=measurements,

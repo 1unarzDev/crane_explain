@@ -328,8 +328,10 @@ def test_bounded_verifier_rejects_causal_claim_in_bare_imperative_next_check():
 
 
 def test_command_motion_template_does_not_assert_independent_delivery_relationship():
-    rendered = render_diagnostic(_command_motion_result())
+    result = _command_motion_result()
+    rendered = render_diagnostic(result)
 
+    assert result.computation_version == "command-motion-discrepancy-v3"
     assert "while delivered odometry recorded" in rendered
     assert "independently delivered odometry" not in rendered
 
