@@ -350,7 +350,7 @@ def test_bounded_verifier_does_not_match_wind_inside_fixed_window():
 def test_bounded_verifier_accepts_missing_odometry_paraphrase_after_citation_repair():
     result = _command_motion_missing_odometry_result()
     candidate = """## Diagnosis
-Insufficient evidence: a command-to-motion discrepancy cannot be assessed because the independently delivered odometry stream is missing. The premise is therefore not established.
+Insufficient evidence: a command-to-motion discrepancy cannot be assessed because the delivered odometry stream is missing. The premise is therefore not established.
 
 ## Decisive evidence
 There were 376 delivered command samples but 0 independent odometry samples. The action ended aborted, with 2 FollowPath failures and 2 source-qualified Wait recoveries.

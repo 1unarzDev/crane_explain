@@ -263,7 +263,8 @@ def test_command_motion_missing_odometry_stream_is_insufficient():
     )
 
     assert result.disposition == DiagnosticDisposition.INSUFFICIENT
-    assert "independently delivered odometry stream" in result.diagnosis
+    assert "delivered odometry stream" in result.diagnosis
+    assert "independently delivered" not in result.diagnosis
     assert "2 recorded FollowPath failures" in result.failure_chain
     assert "2 source-qualified Wait" in result.failure_chain
     assert "execution sequence alone" in result.limits

@@ -1716,7 +1716,7 @@ def diagnose_command_motion_discrepancy(
     if observation.raw_command_sample_count == 0:
         missing.append("delivered Nav2 command stream")
     if observation.raw_odometry_sample_count == 0:
-        missing.append("independently delivered odometry stream")
+        missing.append("delivered odometry stream")
     if missing:
         missing_text = " and ".join(missing)
         measurements = (
