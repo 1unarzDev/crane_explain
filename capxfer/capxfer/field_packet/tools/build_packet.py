@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Refresh the generated parts of the packet and build PACKET.md (and PACKET.pdf if pandoc is installed).
+
+  build_packet.py
+
+1. README.md, between <!-- TIMELINE:BEGIN --> and <!-- TIMELINE:END -->: the timeline table from packet_config.yaml
+   (enabled steps only; trials and hours computed from the configured designs and capxfer/field/schedule.py), plus the
+   main-collection variants (session order block vs segment).
+2. CSV_SPEC.md, between the MANUAL_TABLES markers: the manual-CSV tables from tools/packet_lib.py.
+3. PACKET.md: README, CSV_SPEC, MEASUREMENTS_SHEET, FIRMWARE_HOOKS, the cards of the enabled steps, OPERATOR_CHECKLIST,
+   RETURN_CHECKLIST, with page breaks. PACKET.pdf via pandoc when available.
+Run it after every edit of packet_config.yaml or of the packet documents.
+"""
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import packet_lib as PL  # noqa: E402
+import make_run_sheets as MR  # noqa: E402
+
+from capxfer.field import schedule as SCH  # noqa: E402
+
+P = PL.PACKET
+BREAK = '\n\n<div style="page-break-after: always;"></div>\n\n'
+
+
+def manual_tables():
+    out = []
+    for name, cols in list(PL.SCHEMAS.items()) + [("measurements", PL.MEASUREMENT_COLUMNS)]:
+        out += [f"#### `manual/{name}.csv`", "", "| column | type | unit | req. | allowed | meaning |", "|---|---|---|---|---|---|"]
+        for c, ty, u, req, al, desc in cols:
+            a = " / ".join(x for x in al if x) if ty == "enum" else (f"{al[0]} … {al[1]}" if al else "")
+            out.append(f"| `{c}` | {ty} | {u} | {'yes' if req else ''} | {a} | {desc.replace('|', '/')} |")
+        out.append("")
+    return "\n".join(out)
+
+
+def timeline():
+    cfg = MR.load_config()
+    rows = MR.plan_table(cfg)
+    m = cfg["main"]
+    out = ["| # | step | card | trials | robot time (h) | gate before the next step |", "|---|---|---|---|---|---|"]
+    req, opt = [0.0, 0.0], [0.0, 0.0]
+    for i, r in enumerate(rows):
+        h = r["h"]
+        acc = opt if r.get("optional") else req
+        acc[0] += h[0]
+        acc[1] += h[1]
+        out.append(f"| {i} | {r['title']} | `{r['card']}` | {r['trials']} | {h[0]:.1f}–{h[1]:.1f} | {r['gate']} |")
+    tph, rb = m["trials_per_hour"], m["rebuild_min"]
+    main_on = any(st.get("kind") == "main" and st.get("enabled", True) for st in cfg["timeline"])
+    stph, sp = m.get("short_trials_per_hour", tph), m.get("split_min", rb)
+    out += ["", f"Default plan: **{req[0]:.1f}–{req[1]:.1f} h** of robot time"
+                + (f"; optional extras: **{opt[0]:.0f}–{opt[1]:.0f} h** more" if opt[1] > 0 else "") + ". "
+            f"Rates: {tph[0]} full-library trials/h at best, {tph[1]}/h realistic; {stph[0]}/{stph[1]} P1+P5+P2 trials/h; "
+            f"{rb[0]}–{rb[1]} min per rebuild, {sp[0]}–{sp[1]} min per split set-up (all TEAM-CONFIRM at the shakedown). "
+            "MASK, DEMO, SIMVAL day 2 and the AprilTag pose order follow docs/PROTOCOL_V2.md §2.3 "
+            "(`capxfer/analysis/realv2_design.py`; DEMO minutes per episode from its `DEMO_EPISODE_MIN`)."]
+    off = [st for st in cfg["timeline"] if not st.get("enabled", True)]
+    if off:
+        out += ["", "Disabled blocks (kept in `packet_config.yaml`, `enabled: false`): "
+                + "; ".join(f"{st['title']} (`{st['card']}`)" for st in off) + "."]
+    if not main_on:
+        return "\n".join(out)
+    var = {}
+    for order in ("block", "segment"):
+        b = [sum(f["n_reassemblies"] for f in SCH.generate(f"{k:064x}", session_order=order)["field_sessions"]) for k in range(1, 6)]
+        var[order] = (min(b), max(b))
+    n = SCH.generate("ab" * 16)["n_trials"]
+    probe = (n / tph[0], n / tph[1])
+    out += ["",
+            "**Main-collection time, both session orders** (PENDING OWNER DECISION; `packet_config.yaml` `main.session_order`, "
+            f"currently **{m['session_order']}**):", "",
+            "| variant | rebuilds (incl. each session's first build; 5 seeds) | probing | rebuilding | total |", "|---|---|---|---|---|"]
+    for order, label in (("block", "`block`: random block order, a rebuild at every type change (prereg D3-7 default)"),
+                         ("segment", "`segment`: each type's blocks contiguous inside a session (sensitivity option)")):
+        lo_b, hi_b = var[order]
+        out.append(f"| {label} | {lo_b}–{hi_b} | {probe[0]:.1f} h at {tph[0]}/h … {probe[1]:.1f} h at {tph[1]}/h | "
+                   f"{lo_b * rb[0] / 60:.1f}–{hi_b * rb[1] / 60:.1f} h | {probe[0] + lo_b * rb[0] / 60:.1f}–{probe[1] + hi_b * rb[1] / 60:.1f} h |")
+    return "\n".join(out)
+
+
+def replace_between(text, begin, end, body):
+    i, j = text.index(begin), text.index(end)
+    return text[:i + len(begin)] + "\n" + body + "\n" + text[j:]
+
+
+def main():
+    cfg = MR.load_config()
+    r = (P / "README.md").read_text()
+    r = replace_between(r, "<!-- TIMELINE:BEGIN (generated by tools/build_packet.py from packet_config.yaml) -->",
+                        "<!-- TIMELINE:END -->", timeline())
+    (P / "README.md").write_text(r)
+    c = (P / "CSV_SPEC.md").read_text()
+    c = replace_between(c, "<!-- MANUAL_TABLES:BEGIN (generated by tools/build_packet.py from tools/packet_lib.py) -->",
+                        "<!-- MANUAL_TABLES:END -->", manual_tables())
+    (P / "CSV_SPEC.md").write_text(c)
+    docs = ["README.md", "CSV_SPEC.md", "MEASUREMENTS_SHEET.md", "FIRMWARE_HOOKS.md"]
+    for st in cfg["timeline"]:
+        if st.get("enabled", True) and st["card"].startswith("cards/") and st["card"] not in docs:
+            docs.append(st["card"])
+    docs += ["OPERATOR_CHECKLIST.md", "RETURN_CHECKLIST.md"]
+    parts = []
+    for d in docs:
+        t = (P / d).read_text()
+        t = re.sub(r"<!-- [A-Z_]+:(BEGIN|END)[^>]*-->\n?", "", t)
+        parts.append(f"<!-- {d} -->\n" + t.strip())
+    head = ("# capxfer field packet (print version)\n\nGenerated by `tools/build_packet.py` from the packet folder; "
+            f"packet_config sha256 `{PL.sha256_file(P / 'packet_config.yaml')[:12]}`. The CSV templates are in "
+            "`templates/`, the measurement sheet is `MEASUREMENTS_SHEET.csv`, the tools are in `tools/`.\n")
+    (P / "PACKET.md").write_text(head + BREAK + BREAK.join(parts) + "\n")
+    msg = f"wrote PACKET.md ({len(docs)} documents)"
+    if shutil.which("pandoc"):
+        rr = subprocess.run(["pandoc", str(P / "PACKET.md"), "-o", str(P / "PACKET.pdf")], capture_output=True, text=True)
+        msg += "; PACKET.pdf" if rr.returncode == 0 else f"; pandoc failed: {rr.stderr[:200]}"
+    else:
+        msg += "; pandoc not installed, so no PDF (print PACKET.md, e.g. from a Markdown viewer)"
+    print(msg)
+
+
+if __name__ == "__main__":
+    main()

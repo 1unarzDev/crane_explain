@@ -1,0 +1,4 @@
+# Integrator-owned single source of truth for constants shared across workstreams.
+# capability_threshold: a direction counts as usable/"can reliably do" iff its conservative (conformal lower) ratio >= this.
+# PROVISIONAL 0.5 from WS-D's prereg; finalized from WS-F's docking feasibility pilot before the freeze.
+capability_threshold: 0.5

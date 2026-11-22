@@ -1,0 +1,549 @@
+{
+  "schema": "crane-evidence-calibration-ontology/v1",
+  "catalog_id": "capxfer-wheel-capability-claim-contracts-v1-development",
+  "catalog_version": "1.0.0-development",
+  "domain": "modular mecanum wheel capability (capxfer)",
+  "notes": "Every predicate_id below is implemented in capxfer/explain/contracts.py (PREDICATES); the planner licenses a claim only when all of its required_evidence_ids hold. Claims whose required evidence includes an unavailable predicate can never be licensed. Numbers in text must come from the licensed set (numeric_licensing).",
+  "parameters": {
+    "capability_threshold": 0.5,
+    "number_decimals": 2,
+    "target_keys": [
+      "P1+",
+      "P1-",
+      "P2+",
+      "P2-",
+      "P3+",
+      "P3-",
+      "P4+",
+      "P4-",
+      "P5+",
+      "P5-",
+      "P6x+",
+      "P6x-",
+      "P6y+",
+      "P6y-"
+    ],
+    "direction_phrases": {
+      "P1+": "drive forward",
+      "P1-": "drive backward",
+      "P2+": "strafe left",
+      "P2-": "strafe right",
+      "P3+": "drive diagonally forward-left",
+      "P3-": "drive diagonally backward-right",
+      "P4+": "drive diagonally forward-right",
+      "P4-": "drive diagonally backward-left",
+      "P5+": "rotate counter-clockwise",
+      "P5-": "rotate clockwise",
+      "P6x+": "drive forward at full speed",
+      "P6x-": "drive backward at full speed",
+      "P6y+": "strafe left at full speed",
+      "P6y-": "strafe right at full speed"
+    },
+    "probe_phrases": {
+      "P1": "the forward-backward probe",
+      "P2": "the left-right strafe probe",
+      "P3": "the forward-left diagonal probe",
+      "P4": "the forward-right diagonal probe",
+      "P5": "the yaw probe",
+      "P6x": "the full-speed forward-backward probe",
+      "P6y": "the full-speed strafe probe"
+    },
+    "modes": [
+      "ok",
+      "weak",
+      "coast",
+      "brake",
+      "roller_locked"
+    ],
+    "mode_phrases": {
+      "ok": "healthy",
+      "weak": "weak (reduced drive torque)",
+      "coast": "coasting (unpowered)",
+      "brake": "braked (held against rotation)",
+      "roller_locked": "roller-locked (acting as a plain wheel)"
+    },
+    "rungs": [
+      "E0",
+      "E1",
+      "E2",
+      "E3"
+    ]
+  },
+  "evidence_requirements": [
+    {
+      "requirement_id": "req-cap-interval-present",
+      "evidence_roles": [
+        "conformal_capability_interval"
+      ],
+      "predicate_id": "capability_interval_present",
+      "predicate_version": "v1",
+      "description": "A finite split-conformal capability interval [lo, hi] exists for the direction."
+    },
+    {
+      "requirement_id": "req-cap-upper-below-threshold",
+      "evidence_roles": [
+        "conformal_capability_interval"
+      ],
+      "predicate_id": "capability_upper_below_threshold",
+      "predicate_version": "v1",
+      "description": "The interval upper bound hi is below the capability threshold, so the direction is not reliably achievable at the calibrated level."
+    },
+    {
+      "requirement_id": "req-cap-lower-at-or-above-threshold",
+      "evidence_roles": [
+        "conformal_capability_interval"
+      ],
+      "predicate_id": "capability_lower_at_or_above_threshold",
+      "predicate_version": "v1",
+      "description": "The interval lower bound lo is at or above the capability threshold, so the direction is reliably achievable at the calibrated level."
+    },
+    {
+      "requirement_id": "req-in-model",
+      "evidence_roles": [
+        "ood_test"
+      ],
+      "predicate_id": "ood_flag_clear",
+      "predicate_version": "v1",
+      "description": "The calibrated posterior-predictive OOD test does not flag the trial, so the wheel-fault model and its calibration apply."
+    },
+    {
+      "requirement_id": "req-ood-flagged",
+      "evidence_roles": [
+        "ood_test"
+      ],
+      "predicate_id": "ood_flag_raised",
+      "predicate_version": "v1",
+      "description": "The calibrated OOD test flags the trial as outside known wheel faults."
+    },
+    {
+      "requirement_id": "req-wheel-set-present",
+      "evidence_roles": [
+        "conformal_wheel_mode_set"
+      ],
+      "predicate_id": "wheel_mode_set_present",
+      "predicate_version": "v1",
+      "description": "A calibrated APS wheel-mode set exists for the wheel (structured predictor only)."
+    },
+    {
+      "requirement_id": "req-wheel-set-singleton-ok",
+      "evidence_roles": [
+        "conformal_wheel_mode_set"
+      ],
+      "predicate_id": "wheel_mode_set_is_singleton_ok",
+      "predicate_version": "v1",
+      "description": "The wheel-mode set is exactly {ok}."
+    },
+    {
+      "requirement_id": "req-wheel-set-singleton-fault",
+      "evidence_roles": [
+        "conformal_wheel_mode_set"
+      ],
+      "predicate_id": "wheel_mode_set_is_singleton_fault",
+      "predicate_version": "v1",
+      "description": "The wheel-mode set is a single non-ok mode."
+    },
+    {
+      "requirement_id": "req-wheel-set-excludes-ok",
+      "evidence_roles": [
+        "conformal_wheel_mode_set"
+      ],
+      "predicate_id": "wheel_mode_set_excludes_ok",
+      "predicate_version": "v1",
+      "description": "The wheel-mode set is non-empty and excludes ok (the wheel is faulted; mode may be unresolved)."
+    },
+    {
+      "requirement_id": "req-unique-fault-account",
+      "evidence_roles": [
+        "conformal_wheel_mode_set"
+      ],
+      "predicate_id": "unique_singleton_fault_account",
+      "predicate_version": "v1",
+      "description": "Exactly one wheel's set is a singleton non-ok mode and every other wheel's set is exactly {ok}."
+    },
+    {
+      "requirement_id": "req-capability-deficit",
+      "evidence_roles": [
+        "conformal_capability_interval"
+      ],
+      "predicate_id": "some_direction_upper_below_threshold",
+      "predicate_version": "v1",
+      "description": "At least one direction has interval upper bound below the threshold."
+    },
+    {
+      "requirement_id": "req-rung-permits-cause",
+      "evidence_roles": [
+        "evidence_rung",
+        "conformal_wheel_mode_set"
+      ],
+      "predicate_id": "rung_permits_cause",
+      "predicate_version": "v1",
+      "description": "At E0 (encoders only) a cause may be named only when every wheel's set is a singleton; at E1+ the unique-fault account suffices."
+    },
+    {
+      "requirement_id": "req-floor-cause-observed",
+      "evidence_roles": [
+        "validated_floor_friction_measurement"
+      ],
+      "predicate_id": "unavailable_in_wheel_domain",
+      "predicate_version": "v1",
+      "description": "Independent floor-friction evidence. Not robot-visible in this domain, so never available."
+    },
+    {
+      "requirement_id": "req-payload-cause-observed",
+      "evidence_roles": [
+        "validated_payload_mass_measurement"
+      ],
+      "predicate_id": "unavailable_in_wheel_domain",
+      "predicate_version": "v1",
+      "description": "Independent payload or CG measurement. Not robot-visible in this domain, so never available."
+    }
+  ],
+  "claim_contracts": [
+    {
+      "claim_id": "claim-cap-reliable",
+      "claim_type": "capability",
+      "value": "reliable",
+      "proposition": "The robot can reliably {direction} (calibrated {lo} to {hi}).",
+      "mechanism_family": "capability",
+      "claim_kind": "CAPABILITY_RETAINED",
+      "diagnostic_node_id": "node-capability",
+      "required_evidence_ids": [
+        "req-in-model",
+        "req-cap-interval-present",
+        "req-cap-lower-at-or-above-threshold"
+      ],
+      "non_entailment_ids": [
+        "ne-capability-does-not-identify-wheel"
+      ]
+    },
+    {
+      "claim_id": "claim-cap-unreliable",
+      "claim_type": "capability",
+      "value": "unreliable",
+      "proposition": "The robot cannot reliably {direction} (calibrated {lo} to {hi}).",
+      "mechanism_family": "capability",
+      "claim_kind": "CAPABILITY_DEFICIT",
+      "diagnostic_node_id": "node-capability",
+      "required_evidence_ids": [
+        "req-in-model",
+        "req-cap-interval-present",
+        "req-cap-upper-below-threshold"
+      ],
+      "non_entailment_ids": [
+        "ne-deficit-does-not-identify-wheel",
+        "ne-deficit-never-floor-or-payload"
+      ]
+    },
+    {
+      "claim_id": "claim-wheel-healthy",
+      "claim_type": "wheel_mode",
+      "value": "ok",
+      "proposition": "Wheels {wheels} are consistent only with healthy operation.",
+      "mechanism_family": "wheel_state",
+      "claim_kind": "WHEEL_HEALTHY",
+      "diagnostic_node_id": "node-wheel-state",
+      "required_evidence_ids": [
+        "req-in-model",
+        "req-wheel-set-present",
+        "req-wheel-set-singleton-ok"
+      ],
+      "non_entailment_ids": [
+        "ne-healthy-wheels-do-not-establish-capability"
+      ],
+      "proposition_all": "All {n} wheels are consistent only with healthy operation.",
+      "proposition_one": "Wheel {wheels} is consistent only with healthy operation."
+    },
+    {
+      "claim_id": "claim-wheel-mode",
+      "claim_type": "wheel_mode",
+      "value": "<mode>",
+      "proposition": "Wheel {wheel} is {mode}.",
+      "mechanism_family": "wheel_state",
+      "claim_kind": "WHEEL_MODE_NAMED",
+      "diagnostic_node_id": "node-wheel-mode",
+      "required_evidence_ids": [
+        "req-in-model",
+        "req-wheel-set-present",
+        "req-wheel-set-singleton-fault"
+      ]
+    },
+    {
+      "claim_id": "claim-wheel-faulted-unresolved",
+      "claim_type": "wheel_mode",
+      "value": "not_ok",
+      "proposition": "Wheel {wheel} is faulted, but its mode is not resolved among {modes}.",
+      "mechanism_family": "wheel_state",
+      "claim_kind": "WHEEL_FAULTED",
+      "diagnostic_node_id": "node-wheel-state",
+      "required_evidence_ids": [
+        "req-in-model",
+        "req-wheel-set-present",
+        "req-wheel-set-excludes-ok"
+      ],
+      "non_entailment_ids": [
+        "ne-faulted-does-not-name-mode"
+      ]
+    },
+    {
+      "claim_id": "claim-cause-wheel",
+      "claim_type": "cause",
+      "value": "<mode>",
+      "proposition": "The lost ability to {directions} is attributable to wheel {wheel} being {mode}.",
+      "mechanism_family": "cause",
+      "claim_kind": "WHEEL_CAUSE",
+      "diagnostic_node_id": "node-wheel-cause",
+      "required_evidence_ids": [
+        "req-in-model",
+        "req-capability-deficit",
+        "req-unique-fault-account",
+        "req-rung-permits-cause"
+      ]
+    },
+    {
+      "claim_id": "claim-ood",
+      "claim_type": "ood",
+      "value": "outside_known_wheel_faults",
+      "proposition": "The observed behaviour is outside the known wheel faults.",
+      "mechanism_family": "model_scope",
+      "claim_kind": "OUT_OF_MODEL",
+      "diagnostic_node_id": "node-ood",
+      "required_evidence_ids": [
+        "req-ood-flagged"
+      ],
+      "non_entailment_ids": [
+        "ne-ood-does-not-name-cause"
+      ]
+    },
+    {
+      "claim_id": "claim-cause-floor",
+      "claim_type": "cause",
+      "value": "low_friction_floor",
+      "proposition": "The lost ability to {directions} is attributable to a low-friction floor.",
+      "mechanism_family": "cause",
+      "claim_kind": "ENVIRONMENT_CAUSE",
+      "diagnostic_node_id": "node-external-cause",
+      "required_evidence_ids": [
+        "req-floor-cause-observed"
+      ]
+    },
+    {
+      "claim_id": "claim-cause-payload",
+      "claim_type": "cause",
+      "value": "payload",
+      "proposition": "The lost ability to {directions} is attributable to a payload or CG shift.",
+      "mechanism_family": "cause",
+      "claim_kind": "PAYLOAD_CAUSE",
+      "diagnostic_node_id": "node-external-cause",
+      "required_evidence_ids": [
+        "req-payload-cause-observed"
+      ]
+    }
+  ],
+  "withheld_templates": {
+    "capability_undetermined": "Whether the robot can reliably {direction} is not established (calibrated {lo} to {hi} straddles {tau}).",
+    "capability_not_certified": "No capability is certified because the calibration does not cover this behaviour.",
+    "wheel_ambiguous": "Whether wheels {wheels} are faulted is not established.",
+    "wheel_no_mode_fits": "No known mode fits wheel {wheel}.",
+    "wheel_no_evidence": "No per-wheel evidence is available, so no wheel is named.",
+    "cause_deficit": "The cause of the lost ability to {directions} is not established; no wheel, floor or payload cause is claimed.",
+    "cause_ood": "The cause is not established; no wheel is blamed.",
+    "wheel_ambiguous_one": "Whether wheel {wheels} is faulted is not established."
+  },
+  "baseline_templates": {
+    "point_cap_reliable": "The robot can {direction} (estimated {v}).",
+    "point_cap_unreliable": "The robot cannot {direction} (estimated {v}).",
+    "uncalibrated_cap_reliable": "The robot can reliably {direction} (uncalibrated {lo} to {hi}).",
+    "uncalibrated_cap_unreliable": "The robot cannot reliably {direction} (uncalibrated {lo} to {hi}).",
+    "uncalibrated_capability_undetermined": "Whether the robot can reliably {direction} is not established (uncalibrated {lo} to {hi} straddles {tau})."
+  },
+  "action_templates": {
+    "decision_go": "Decision for {task}: proceed.",
+    "decision_no_go": "Decision for {task}: do not attempt.",
+    "decision_probe": "Decision for {task}: probe first.",
+    "next_probe": "Next probe: run {probe} to resolve whether the robot can reliably {direction}."
+  },
+  "numeric_licensing": {
+    "rule": "Every number in the text must equal (at the printed precision) a number carried by a realized claim (interval bounds or point estimate), the capability threshold, or a count of named wheels. No other number may appear.",
+    "precision_decimals": 2
+  },
+  "non_entailments": [
+    {
+      "non_entailment_id": "ne-deficit-does-not-identify-wheel",
+      "basis_claim_ids": [
+        "claim-cap-unreliable"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-wheel-mode",
+        "claim-cause-wheel"
+      ],
+      "rationale": "A calibrated capability deficit does not name a wheel or mode unless the wheel-mode set is a singleton and the unique-fault account holds.",
+      "additional_evidence_requirement_ids": [
+        "req-wheel-set-singleton-fault",
+        "req-unique-fault-account"
+      ]
+    },
+    {
+      "non_entailment_id": "ne-deficit-never-floor-or-payload",
+      "basis_claim_ids": [
+        "claim-cap-unreliable",
+        "claim-ood"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-cause-floor",
+        "claim-cause-payload"
+      ],
+      "rationale": "Neither a capability deficit nor an OOD flag licenses a floor or payload cause; no robot-visible evidence measures either.",
+      "additional_evidence_requirement_ids": [
+        "req-floor-cause-observed",
+        "req-payload-cause-observed"
+      ]
+    },
+    {
+      "non_entailment_id": "ne-ood-does-not-name-cause",
+      "basis_claim_ids": [
+        "claim-ood"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-wheel-mode",
+        "claim-wheel-faulted-unresolved",
+        "claim-cause-wheel",
+        "claim-cap-reliable",
+        "claim-cap-unreliable",
+        "claim-wheel-healthy"
+      ],
+      "rationale": "An OOD flag licenses only 'outside known wheel faults'. Calibration does not cover the trial, so no capability or wheel claim is certified.",
+      "additional_evidence_requirement_ids": [
+        "req-in-model"
+      ]
+    },
+    {
+      "non_entailment_id": "ne-faulted-does-not-name-mode",
+      "basis_claim_ids": [
+        "claim-wheel-faulted-unresolved"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-wheel-mode",
+        "claim-cause-wheel"
+      ],
+      "rationale": "A set that excludes ok but holds several modes names the wheel as faulted, not the mode or the cause.",
+      "additional_evidence_requirement_ids": [
+        "req-wheel-set-singleton-fault"
+      ]
+    },
+    {
+      "non_entailment_id": "ne-e0-nonsingleton-no-cause",
+      "basis_claim_ids": [
+        "claim-cap-unreliable",
+        "claim-wheel-faulted-unresolved"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-cause-wheel"
+      ],
+      "applies_at_rungs": [
+        "E0"
+      ],
+      "rationale": "With encoders only, any non-singleton wheel-mode set blocks every cause claim; a roller-locked or coasting wheel is not separable from its neighbours by wheel speed alone.",
+      "additional_evidence_requirement_ids": [
+        "req-rung-permits-cause"
+      ]
+    },
+    {
+      "non_entailment_id": "ne-healthy-wheels-do-not-establish-capability",
+      "basis_claim_ids": [
+        "claim-wheel-healthy"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-cap-reliable"
+      ],
+      "rationale": "Healthy wheel sets do not establish capability in a direction; only the capability interval does.",
+      "additional_evidence_requirement_ids": [
+        "req-cap-lower-at-or-above-threshold"
+      ]
+    },
+    {
+      "non_entailment_id": "ne-capability-does-not-identify-wheel",
+      "basis_claim_ids": [
+        "claim-cap-reliable"
+      ],
+      "unsupported_consequent_claim_ids": [
+        "claim-wheel-healthy"
+      ],
+      "rationale": "Retained capability in some directions does not establish that every wheel is healthy.",
+      "additional_evidence_requirement_ids": [
+        "req-wheel-set-singleton-ok"
+      ]
+    }
+  ],
+  "diagnostic_nodes": [
+    {
+      "node_id": "node-capability",
+      "mechanism_family": "capability",
+      "label": "calibrated directional capability",
+      "rank_within_family": 0,
+      "parent_node_ids": [],
+      "claim_ids": [
+        "claim-cap-reliable",
+        "claim-cap-unreliable"
+      ]
+    },
+    {
+      "node_id": "node-wheel-state",
+      "mechanism_family": "wheel_state",
+      "label": "wheel healthy or faulted",
+      "rank_within_family": 0,
+      "parent_node_ids": [],
+      "claim_ids": [
+        "claim-wheel-healthy",
+        "claim-wheel-faulted-unresolved"
+      ]
+    },
+    {
+      "node_id": "node-wheel-mode",
+      "mechanism_family": "wheel_state",
+      "label": "named wheel fault mode",
+      "rank_within_family": 1,
+      "parent_node_ids": [
+        "node-wheel-state"
+      ],
+      "claim_ids": [
+        "claim-wheel-mode"
+      ]
+    },
+    {
+      "node_id": "node-wheel-cause",
+      "mechanism_family": "cause",
+      "label": "wheel fault as the cause of a capability deficit",
+      "rank_within_family": 2,
+      "parent_node_ids": [
+        "node-wheel-mode",
+        "node-capability"
+      ],
+      "claim_ids": [
+        "claim-cause-wheel"
+      ]
+    },
+    {
+      "node_id": "node-external-cause",
+      "mechanism_family": "cause",
+      "label": "floor or payload cause (never licensed)",
+      "rank_within_family": 2,
+      "parent_node_ids": [
+        "node-capability"
+      ],
+      "claim_ids": [
+        "claim-cause-floor",
+        "claim-cause-payload"
+      ]
+    },
+    {
+      "node_id": "node-ood",
+      "mechanism_family": "model_scope",
+      "label": "outside known wheel faults",
+      "rank_within_family": 0,
+      "parent_node_ids": [],
+      "claim_ids": [
+        "claim-ood"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# capxfer on the research cluster: one fastsim "episode" per job seed (the fastsim core runs a one-tick stub;
+# the real work is cluster/runner.py -> cluster/tasks.py in a torch interpreter). See docs/CLUSTER.md.
+adapter:
+  ref: adapter.py:CapxferAdapter
+  options: {cfg: {task: smoke}}
+scenarios:
+  dir: stub_scn
+  pattern: 'ep-s{seed}.json'
+  format: {ref: stub_format.py:StubFormat}
+perception: {name: cone, hfov_deg: 90.0, range_m: 20.0, occlusion: true, mount: [0.0, 0.0, 0.0]}
+time_limit_s: 5
+workers: 1
